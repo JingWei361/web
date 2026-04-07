@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Travaler - 行程規劃</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
+    <style>
+        .loading-dots:after { content: ' .'; animation: dots 1.5s steps(5, end) infinite; }
+        @keyframes dots { 0%, 20% { content: ' .'; } 40% { content: ' ..'; } 60% { content: ' ...'; } 80%, 100% { content: ''; } }
+    </style>
+</head>
+<body class="bg-slate-50 text-slate-800">
+    <nav id="nav-app" class="bg-white shadow-sm sticky top-0 z-50">
+        <div class="max-w-5xl mx-auto px-4 h-16 flex items-center justify-between">
+            <a href="index.html" class="text-2xl font-bold text-blue-600">AI Travaler</a>
+            <div class="space-x-6 font-medium text-slate-600 flex items-center">
+                <a href="index.html" class="hover:text-blue-600">首頁</a>
+                <a href="planner.html" class="text-blue-600">行程規劃</a>
+                <a href="explore.html" class="hover:text-blue-600">探索景點</a>
+                <a href="favorites.html" class="relative hover:text-blue-600">
+                    我的收藏
+                    <span v-if="favCount > 0" class="absolute -top-2 -right-3 bg-red-500 text-white text-[10px] rounded-full px-1.5 animate-bounce">{{ favCount }}</span>
+                </a>
+                <a href="about.html" class="hover:text-blue-600">關於我們</a>
+            </div>
+        </div>
+    </nav>
+
+    <div id="app">
+        <section class="max-w-3xl mx-auto px-4 py-12">
+            <div class="bg-white p-8 rounded-3xl shadow-md mb-8">
+                <h2 class="text-2xl font-bold mb-6">告訴 AI 你的計畫</h2>
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
+                    <div>
+                        <label class="block text-sm font-medium text-slate-600 mb-1">目的地</label>
+                        <input v-model="form.city" type="text" placeholder="例如：東京、首爾..." class="w-full border border-slate-200 rounded-xl px-4 py-2 focus:ring-2 focus:ring-blue-500 outline-none">
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium text-slate-600 mb-1">天數</label>
+                        <select v-model="form.days" class="w-full border border-slate-200 rounded-xl px-4 py-2 outline-none">
+                            <option value="1">1 天</option>
+                            <option value="3">3 天</option>
+                            <option value="5">5 天</option>
+                        </select>
+                    </div>
+                </div>
+                <button @click="generateItinerary" :disabled="isGenerating" class="w-full bg-slate-900 text-white py-3 rounded-xl font-bold hover:bg-slate-800 transition disabled:bg-slate-300">
+                    {{ isGenerating ? 'AI 正在計算中...' : '生成行程' }}
+                </button>
+            </div>
+
+            <div v-if="isGenerating || itinerary" class="bg-white p-8 rounded-3xl shadow-md">
+                <div v-if="isGenerating" class="text-center py-10">
+                    <div class="inline-block animate-spin rounded-full h-8 w-8 border-4 border-blue-500 border-t-transparent mb-4"></div>
+                    <p class="text-slate-500 font-medium loading-dots">AI 正在為您安排最佳路線</p>
+                </div>
+                <div v-else>
+                    <div class="flex justify-between items-center mb-6">
+                        <h3 class="text-xl font-bold">{{ form.city }} {{ form.days }}日遊規劃</h3>
+                        <span class="bg-blue-100 text-blue-600 text-xs px-2 py-1 rounded-md font-bold">AI 精選</span>
+                    </div>
+                    <div class="space-y-8">
+                        <div v-for="(day, index) in itinerary" :key="index" class="relative pl-6 border-l-2 border-blue-100">
+                            <div class="absolute -left-2 top-0 w-4 h-4 bg-blue-500 rounded-full"></div>
+                            <h4 class="font-bold text-blue-600 mb-4">Day {{ index + 1 }}</h4>
+                            <div class="space-y-4">
+                                <div v-for="spot in day" class="flex items-center p-3 bg-slate-50 rounded-xl hover:bg-slate-100 transition">
+                                    <div class="text-2xl mr-4">{{ spot.emoji }}</div>
+                                    <div class="flex-1">
+                                        <p class="font-bold">{{ spot.name }}</p>
+                                        <p class="text-xs text-slate-400">{{ spot.time }}</p>
+                                    </div>
+                                    <button @click="toggleFavorite(spot)" class="text-red-400 text-xl">{{ isFavorite(spot) ? '❤️' : '♡' }}</button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
+    </div>
+
+    <script>
+        // 導航欄邏輯
+        Vue.createApp({
+            setup() {
+                const favCount = Vue.ref(0);
+                const refresh = () => {
+                    const data = localStorage.getItem('my_travel_favorites');
+                    favCount.value = data ? JSON.parse(data).length : 0;
+                };
+                Vue.onMounted(refresh);
+                window.addEventListener('fav-updated', refresh);
+                return { favCount };
+            }
+        }).mount('#nav-app');
+
+        // 頁面內容邏輯
+        Vue.createApp({
+            setup() {
+                const isGenerating = Vue.ref(false);
+                const itinerary = Vue.ref(null);
+                const favorites = Vue.ref([]);
+                const form = Vue.reactive({ city: '', days: '1' });
+                const generateItinerary = () => {
+                    if (!form.city) return alert('請輸入目的地');
+                    isGenerating.value = true;
+                    itinerary.value = null;
+                    setTimeout(() => {
+                        itinerary.value = Array.from({ length: parseInt(form.days) }, (_, i) => [
+                            { name: `${form.city} 熱門景點 A`, emoji: '🏛️', time: '09:00 - 12:00' },
+                            { name: `${form.city} 隱藏美食 B`, emoji: '🍛', time: '12:30 - 14:00' }
+                        ]);
+                        isGenerating.value = false;
+                    }, 2000);
+                };
+                const toggleFavorite = (spot) => {
+                    const idx = favorites.value.findIndex(f => f.name === spot.name);
+                    if (idx > -1) favorites.value.splice(idx, 1);
+                    else favorites.value.push(spot);
+                    localStorage.setItem('my_travel_favorites', JSON.stringify(favorites.value));
+                    window.dispatchEvent(new Event('fav-updated'));
+                };
+                const isFavorite = (spot) => favorites.value.some(f => f.name === spot.name);
+                Vue.onMounted(() => {
+                    const saved = localStorage.getItem('my_travel_favorites');
+                    if (saved) favorites.value = JSON.parse(saved);
+                });
+                return { form, isGenerating, itinerary, toggleFavorite, isFavorite, generateItinerary };
+            }
+        }).mount('#app');
+    </script>
+</body>
+</html>

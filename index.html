@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Travaler - 首頁</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-slate-50 text-slate-800">
+    <nav class="bg-white shadow-sm sticky top-0 z-50">
+        <div class="max-w-5xl mx-auto px-4 h-16 flex items-center justify-between">
+            <a href="index.html" class="text-2xl font-bold text-blue-600">AI Travaler</a>
+            <div class="space-x-6 font-medium">
+                <a href="index.html" class="text-blue-600">首頁</a>
+                <a href="planner.html" class="hover:text-blue-600">行程規劃</a>
+                <a href="explore.html" class="hover:text-blue-600">探索景點</a>
+                <a href="favorites.html" class="hover:text-blue-600">我的收藏</a>
+                <a href="about.html" class="hover:text-blue-600">關於我們</a>
+            </div>
+        </div>
+    </nav>
+
+    <section class="max-w-5xl mx-auto px-4 py-20 text-center">
+        <h2 class="text-5xl font-extrabold mb-6 leading-tight">讓 AI 幫你搞定<br><span class="text-blue-600">下一場完美的旅行</span></h2>
+        <p class="text-xl text-slate-500 mb-10">輸入地點與天數，一鍵生成專屬你的行程計畫。</p>
+        <a href="planner.html" class="bg-blue-600 text-white px-8 py-4 rounded-full text-lg font-bold hover:bg-blue-700 transition shadow-lg inline-block">
+            立即開始規劃
+        </a>
+        <div class="mt-20 grid grid-cols-1 md:grid-cols-3 gap-8 text-left">
+            <div class="bg-white p-6 rounded-2xl shadow-sm">
+                <div class="text-blue-600 text-3xl mb-4">💡</div>
+                <h3 class="font-bold text-lg mb-2">智慧生成</h3>
+                <p class="text-slate-500 text-sm">利用先進 AI 模型，根據你的偏好推薦最合適的景點。</p>
+            </div>
+            <div class="bg-white p-6 rounded-2xl shadow-sm">
+                <div class="text-blue-600 text-3xl mb-4">📍</div>
+                <h3 class="font-bold text-lg mb-2">在地深度</h3>
+                <p class="text-slate-500 text-sm">不只是熱門打卡點，更有當地人才知道的隱藏美食。</p>
+            </div>
+            <div class="bg-white p-6 rounded-2xl shadow-sm">
+                <div class="text-blue-600 text-3xl mb-4">❤️</div>
+                <h3 class="font-bold text-lg mb-2">輕鬆管理</h3>
+                <p class="text-slate-500 text-sm">隨時收藏喜愛的景點，規劃行程不再手忙腳亂。</p>
+            </div>
+        </div>
+    </section>
+<script>
+        Vue.createApp({
+            setup() {
+                const favCount = Vue.ref(0);
+                const refresh = () => {
+                    const data = localStorage.getItem('my_travel_favorites');
+                    favCount.value = data ? JSON.parse(data).length : 0;
+                };
+                Vue.onMounted(refresh);
+                window.addEventListener('storage', refresh);
+                return { favCount };
+            }
+        }).mount('#nav-app');
+    </script>
+</body>
+</html>
+

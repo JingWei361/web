@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Travaler - 關於我們</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
+</head>
+<body class="bg-slate-50 text-slate-800">
+    <nav id="nav-app" class="bg-white shadow-sm sticky top-0 z-50">
+        <div class="max-w-5xl mx-auto px-4 h-16 flex items-center justify-between">
+            <a href="index.html" class="text-2xl font-bold text-blue-600">AI Travaler</a>
+            <div class="space-x-6 font-medium text-slate-600 flex items-center">
+                <a href="index.html" class="hover:text-blue-600">首頁</a>
+                <a href="planner.html" class="hover:text-blue-600">行程規劃</a>
+                <a href="explore.html" class="hover:text-blue-600">探索景點</a>
+                <a href="favorites.html" class="relative hover:text-blue-600">
+                    我的收藏
+                    <span v-if="favCount > 0" class="absolute -top-2 -right-3 bg-red-500 text-white text-[10px] rounded-full px-1.5 animate-bounce">{{ favCount }}</span>
+                </a>
+                <a href="about.html" class="text-blue-600">關於我們</a>
+            </div>
+        </div>
+    </nav>
+
+    <section class="max-w-4xl mx-auto px-4 py-16 text-center">
+         <h2 class="text-4xl font-extrabold mb-4">關於我們的專題</h2>
+        <p class="text-blue-600 font-medium mb-12">靜宜大學 人工智慧應用學系</p>
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-8">
+            <div class="bg-white p-6 rounded-2xl shadow-sm border border-slate-100">
+                <div class="text-4xl mb-4">👨‍💻</div>
+                <h4 class="font-bold">組長:</h4>
+                <p class="text-slate-400 text-xs mt-2">負責：</p>
+            </div>
+            <div class="bg-white p-6 rounded-2xl shadow-sm border border-slate-100">
+                <div class="text-4xl mb-4">🤖</div>
+                <h4 class="font-bold">組員 </h4>
+                <p class="text-slate-400 text-xs mt-2">負責：</p>
+            </div>
+            <div class="bg-white p-6 rounded-2xl shadow-sm border border-slate-100">
+                <div class="text-4xl mb-4">🎨</div>
+                <h4 class="font-bold">組員</h4>
+                <p class="text-slate-400 text-xs mt-2">負責：</p>
+        </div>
+    </section>
+
+    <script>
+        Vue.createApp({
+            setup() {
+                const favCount = Vue.ref(0);
+                const refresh = () => {
+                    const data = localStorage.getItem('my_travel_favorites');
+                    favCount.value = data ? JSON.parse(data).length : 0;
+                };
+                Vue.onMounted(refresh);
+                window.addEventListener('storage', refresh);
+                return { favCount };
+            }
+        }).mount('#nav-app');
+    </script>
+</body>
+</html>

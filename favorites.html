@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Travaler - 我的收藏</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
+</head>
+<body class="bg-slate-50 text-slate-800">
+    <nav id="nav-app" class="bg-white shadow-sm sticky top-0 z-50">
+        <div class="max-w-5xl mx-auto px-4 h-16 flex items-center justify-between">
+            <a href="index.html" class="text-2xl font-bold text-blue-600">AI Travaler</a>
+            <div class="space-x-6 font-medium text-slate-600 flex items-center">
+                <a href="index.html" class="hover:text-blue-600">首頁</a>
+                <a href="planner.html" class="hover:text-blue-600">行程規劃</a>
+                <a href="explore.html" class="hover:text-blue-600">探索景點</a>
+                <a href="favorites.html" class="text-blue-600">我的收藏</a>
+                <a href="about.html" class="hover:text-blue-600">關於我們</a>
+            </div>
+        </div>
+    </nav>
+
+    <div id="app">
+        <section class="max-w-3xl mx-auto px-4 py-12">
+            <h2 class="text-3xl font-bold mb-8">我的收藏 ({{ favorites.length }})</h2>
+            <div v-if="favorites.length === 0" class="text-center py-20 bg-white rounded-3xl border-2 border-dashed">
+                <p class="text-slate-400">目前沒有收藏。</p>
+            </div>
+            <div v-else class="space-y-4">
+                <div v-for="spot in favorites" class="bg-white p-4 rounded-2xl flex items-center shadow-sm">
+                    <div class="text-3xl mr-6">{{ spot.emoji }}</div>
+                    <div class="flex-1 font-bold">{{ spot.name }}</div>
+                    <button @click="remove(spot)" class="text-slate-300 hover:text-red-500 px-2 text-xl">🗑️</button>
+                </div>
+            </div>
+        </section>
+    </div>
+
+    <script>
+        Vue.createApp({
+            setup() {
+                const favorites = Vue.ref([]);
+                const remove = (spot) => {
+                    favorites.value = favorites.value.filter(f => f.name !== spot.name);
+                    localStorage.setItem('my_travel_favorites', JSON.stringify(favorites.value));
+                    window.dispatchEvent(new Event('fav-updated'));
+                };
+                Vue.onMounted(() => {
+                    const saved = localStorage.getItem('my_travel_favorites');
+                    if (saved) favorites.value = JSON.parse(saved);
+                });
+                return { favorites, remove };
+            }
+        }).mount('#app');
+    </script>
+</body>
+</html>
