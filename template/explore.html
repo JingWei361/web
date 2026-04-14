@@ -1,5 +1,6 @@
 <!DOCTYPE html>
 <html lang="zh-TW">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -7,20 +8,30 @@
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
 </head>
+
 <body class="bg-slate-50 text-slate-800">
     <nav id="nav-app" class="bg-white shadow-sm sticky top-0 z-50">
         <div class="max-w-5xl mx-auto px-4 h-16 flex items-center justify-between">
-            <a href="index.html" class="text-2xl font-bold text-blue-600">AI Travaler</a>
-            <div class="space-x-6 font-medium text-slate-600 flex items-center">
-                <a href="index.html" class="hover:text-blue-600">首頁</a>
-                <a href="planner.html" class="hover:text-blue-600">行程規劃</a>
-                <a href="explore.html" class="text-blue-600">探索景點</a>
-                <a href="favorites.html" class="relative hover:text-blue-600">
-                    我的收藏
-                    <span v-if="favCount > 0" class="absolute -top-2 -right-3 bg-red-500 text-white text-[10px] rounded-full px-1.5 animate-bounce">{{ favCount }}</span>
-                </a>
-                <a href="about.html" class="hover:text-blue-600">關於我們</a>
-            </div>
+            <a href="/" class="text-2xl font-bold text-blue-600">AI Travaler</a>
+            <nav class="bg-white shadow-sm sticky top-0 z-50">
+                <div class="max-w-5xl mx-auto px-4 h-16 flex items-center justify-between">
+                    <a href="/" class="text-2xl font-bold text-blue-600">AI Travaler</a>
+                    <div class="space-x-6 font-medium">
+                        <a href="/" class="text-blue-600">首頁</a>
+                        <a href="/planner" class="hover:text-blue-600">行程規劃</a>
+                        <a href="/explore" class="hover:text-blue-600">探索景點</a>
+                        <a href="/favorites" class="hover:text-blue-600">我的收藏</a>
+                        <a href="/about" class="hover:text-blue-600">關於我們</a>
+                        {% if not user %}
+                        <a href="/login" class="hover:text-blue-600">登入</a>
+                        <a href="/register" class="hover:text-blue-600">註冊</a>
+                        {% else %}
+                        <span>歡迎, {{ name }}</span>
+                        <a href="/logout" class="hover:text-blue-600">登出</a>
+                        {% endif %}
+                    </div>
+                </div>
+            </nav>
         </div>
     </nav>
 
@@ -28,12 +39,14 @@
         <section class="max-w-5xl mx-auto px-4 py-12">
             <h2 class="text-3xl font-bold mb-8">熱門推薦景點</h2>
             <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
-                <div v-for="spot in exploreSpots" :key="spot.name" class="bg-white rounded-2xl overflow-hidden shadow-sm hover:shadow-md transition">
+                <div v-for="spot in exploreSpots" :key="spot.name"
+                    class="bg-white rounded-2xl overflow-hidden shadow-sm hover:shadow-md transition">
                     <div class="h-48 bg-slate-200 flex items-center justify-center text-4xl">{{ spot.emoji }}</div>
                     <div class="p-4">
                         <div class="flex justify-between items-start mb-2">
                             <h3 class="font-bold text-lg">{{ spot.name }}</h3>
-                            <button @click="toggleFavorite(spot)" class="text-red-400 text-xl">{{ isFavorite(spot) ? '❤️' : '♡' }}</button>
+                            <button @click="toggleFavorite(spot)" class="text-red-400 text-xl">{{ isFavorite(spot) ?
+                                '❤️' : '♡' }}</button>
                         </div>
                         <p class="text-slate-500 text-sm mb-4">{{ spot.desc }}</p>
                         <span class="bg-slate-100 px-2 py-1 rounded text-xs text-slate-400"># {{ spot.tag }}</span>
@@ -60,13 +73,21 @@
         Vue.createApp({
             setup() {
                 const favorites = Vue.ref([]);
-                const exploreSpots = [
-                    { name: '淺草寺', emoji: '🏮', tag: '歷史地標', desc: '東京最古老的寺廟。' },
-                    { name: '澀谷橫丁', emoji: '🍜', tag: '美食推薦', desc: '匯聚全日本美食。' },
-                    { name: '晴空塔', emoji: '🗼', tag: '必去景點', desc: '俯瞰東京全景。' },
-                    { name: '築地市場', emoji: '🍣', tag: '美食推薦', desc: '品嚐最新鮮的海鮮與玉子燒。' },
-                    { name: '景福宮', emoji: '🏯', tag: '歷史地標', desc: '首爾最具代表性的朝鮮時代宮殿。' }
-                ];
+                const exploreSpots = Vue.ref([]);
+                const loadSpots = async () => {
+                    try {
+                        const response = await fetch('/api/explore_spots');
+                        const data = await response.json();
+                        exploreSpots.value = data.spots;
+                    } catch (error) {
+                        console.error('載入景點失敗:', error);
+                        // 備用數據
+                        exploreSpots.value = [
+                            { name: '淺草寺', emoji: '🏮', tag: '歷史地標', desc: '東京最古老的寺廟。' },
+                            { name: '澀谷橫丁', emoji: '🍜', tag: '美食推薦', desc: '匯聚全日本美食。' }
+                        ];
+                    }
+                };
                 const toggleFavorite = (spot) => {
                     const idx = favorites.value.findIndex(f => f.name === spot.name);
                     if (idx > -1) favorites.value.splice(idx, 1);
@@ -76,6 +97,7 @@
                 };
                 const isFavorite = (spot) => favorites.value.some(f => f.name === spot.name);
                 Vue.onMounted(() => {
+                    loadSpots();
                     const saved = localStorage.getItem('my_travel_favorites');
                     if (saved) favorites.value = JSON.parse(saved);
                 });
@@ -84,4 +106,5 @@
         }).mount('#app');
     </script>
 </body>
+
 </html>

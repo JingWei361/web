@@ -1,29 +1,40 @@
 <!DOCTYPE html>
 <html lang="zh-TW">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>AI Travaler - 首頁</title>
     <script src="https://cdn.tailwindcss.com"></script>
 </head>
+
 <body class="bg-slate-50 text-slate-800">
     <nav class="bg-white shadow-sm sticky top-0 z-50">
         <div class="max-w-5xl mx-auto px-4 h-16 flex items-center justify-between">
-            <a href="index.html" class="text-2xl font-bold text-blue-600">AI Travaler</a>
+            <a href="/" class="text-2xl font-bold text-blue-600">AI Travaler</a>
             <div class="space-x-6 font-medium">
-                <a href="index.html" class="text-blue-600">首頁</a>
-                <a href="planner.html" class="hover:text-blue-600">行程規劃</a>
-                <a href="explore.html" class="hover:text-blue-600">探索景點</a>
-                <a href="favorites.html" class="hover:text-blue-600">我的收藏</a>
-                <a href="about.html" class="hover:text-blue-600">關於我們</a>
+                <a href="/" class="text-blue-600">首頁</a>
+                <a href="/planner" class="hover:text-blue-600">行程規劃</a>
+                <a href="/explore" class="hover:text-blue-600">探索景點</a>
+                <a href="/favorites" class="hover:text-blue-600">我的收藏</a>
+                <a href="/about" class="hover:text-blue-600">關於我們</a>
+                {% if not user %}
+                <a href="/login" class="hover:text-blue-600">登入</a>
+                <a href="/register" class="hover:text-blue-600">註冊</a>
+                {% else %}
+                <span>歡迎, {{ name }}</span>
+                <a href="/logout" class="hover:text-blue-600">登出</a>
+                {% endif %}
             </div>
         </div>
     </nav>
 
     <section class="max-w-5xl mx-auto px-4 py-20 text-center">
-        <h2 class="text-5xl font-extrabold mb-6 leading-tight">讓 AI 幫你搞定<br><span class="text-blue-600">下一場完美的旅行</span></h2>
+        <h2 class="text-5xl font-extrabold mb-6 leading-tight">讓 AI 幫你搞定<br><span class="text-blue-600">下一場完美的旅行</span>
+        </h2>
         <p class="text-xl text-slate-500 mb-10">輸入地點與天數，一鍵生成專屬你的行程計畫。</p>
-        <a href="planner.html" class="bg-blue-600 text-white px-8 py-4 rounded-full text-lg font-bold hover:bg-blue-700 transition shadow-lg inline-block">
+        <a href="/planner"
+            class="bg-blue-600 text-white px-8 py-4 rounded-full text-lg font-bold hover:bg-blue-700 transition shadow-lg inline-block">
             立即開始規劃
         </a>
         <div class="mt-20 grid grid-cols-1 md:grid-cols-3 gap-8 text-left">
@@ -44,7 +55,7 @@
             </div>
         </div>
     </section>
-<script>
+    <script>
         Vue.createApp({
             setup() {
                 const favCount = Vue.ref(0);
@@ -59,5 +70,5 @@
         }).mount('#nav-app');
     </script>
 </body>
-</html>
 
+</html>
