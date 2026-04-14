@@ -15,7 +15,6 @@
             <a href="/" class="text-2xl font-bold text-blue-600">AI Travaler</a>
             <nav class="bg-white shadow-sm sticky top-0 z-50">
                 <div class="max-w-5xl mx-auto px-4 h-16 flex items-center justify-between">
-                    <a href="/" class="text-2xl font-bold text-blue-600">AI Travaler</a>
                     <div class="space-x-6 font-medium">
                         <a href="/" class="text-blue-600">首頁</a>
                         <a href="/planner" class="hover:text-blue-600">行程規劃</a>
@@ -38,6 +37,7 @@
     <div id="app">
         <section class="max-w-5xl mx-auto px-4 py-12">
             <h2 class="text-3xl font-bold mb-8">熱門推薦景點</h2>
+            {% raw %}
             <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
                 <div v-for="spot in exploreSpots" :key="spot.name"
                     class="bg-white rounded-2xl overflow-hidden shadow-sm hover:shadow-md transition">
@@ -53,6 +53,7 @@
                     </div>
                 </div>
             </div>
+            {% endraw %}
         </section>
     </div>
 

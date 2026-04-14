@@ -67,7 +67,8 @@ def favorites():
     return render_template("favorites.html",
                            user=current_user,
                            name=current_name,
-                           gender=current_gender)
+                           gender=current_gender,
+                           favorites=[])
 
 @app.route("/about")
 def about():
@@ -221,5 +222,5 @@ def logout():
     return redirect(url_for('home'))
 
 if __name__ == "__main__":
-    # 以除錯模式運行 Flask 應用程式，監聽端口 5001
-    app.run(debug=True, port=5001)
+    # 以除錯模式運行 Flask 應用程式，監聽端口 5002
+    app.run(debug=True, port=5002)
