@@ -1,25 +1,50 @@
 <!DOCTYPE html>
 <html lang="zh-TW">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>登入 - AI Travaler</title>
     <script src="https://cdn.tailwindcss.com"></script>
 </head>
+
 <body class="bg-slate-50 text-slate-800">
+    <nav class="bg-white shadow-sm sticky top-0 z-50">
+        <div class="max-w-5xl mx-auto px-4 h-16 flex items-center justify-between">
+            <a href="/" class="text-2xl font-bold text-blue-600">AI Travaler</a>
+            <div class="space-x-6 font-medium">
+                <a href="/" class="text-blue-600">首頁</a>
+                <a href="/planner" class="hover:text-blue-600">行程規劃</a>
+                <a href="/explore" class="hover:text-blue-600">探索景點</a>
+                <a href="/favorites" class="hover:text-blue-600">我的收藏</a>
+                <a href="/about" class="hover:text-blue-600">關於我們</a>
+                {% if not user %}
+                <a href="/login" class="hover:text-blue-600">登入</a>
+                <a href="/register" class="hover:text-blue-600">註冊</a>
+                {% else %}
+                <span>歡迎, {{ name }}</span>
+                <a href="/logout" class="hover:text-blue-600">登出</a>
+                {% endif %}
+            </div>
+        </div>
+    </nav>
+
     <div class="min-h-screen flex items-center justify-center">
         <div class="bg-white p-8 rounded-3xl shadow-md w-full max-w-md">
             <h2 class="text-2xl font-bold mb-6 text-center">登入</h2>
             <form method="POST">
                 <div class="mb-4">
                     <label class="block text-sm font-medium text-slate-600 mb-1">信箱</label>
-                    <input type="email" name="email" required class="w-full border border-slate-200 rounded-xl px-4 py-2 focus:ring-2 focus:ring-blue-500 outline-none">
+                    <input type="email" name="email" required
+                        class="w-full border border-slate-200 rounded-xl px-4 py-2 focus:ring-2 focus:ring-blue-500 outline-none">
                 </div>
                 <div class="mb-6">
                     <label class="block text-sm font-medium text-slate-600 mb-1">密碼</label>
-                    <input type="password" name="password" required class="w-full border border-slate-200 rounded-xl px-4 py-2 focus:ring-2 focus:ring-blue-500 outline-none">
+                    <input type="password" name="password" required
+                        class="w-full border border-slate-200 rounded-xl px-4 py-2 focus:ring-2 focus:ring-blue-500 outline-none">
                 </div>
-                <button type="submit" class="w-full bg-blue-600 text-white py-3 rounded-xl font-bold hover:bg-blue-700 transition">
+                <button type="submit"
+                    class="w-full bg-blue-600 text-white py-3 rounded-xl font-bold hover:bg-blue-700 transition">
                     登入
                 </button>
             </form>
@@ -29,4 +54,5 @@
         </div>
     </div>
 </body>
+
 </html>

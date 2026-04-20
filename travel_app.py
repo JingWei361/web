@@ -14,8 +14,8 @@ app.secret_key = 'ai_traveler_secret_key_2026'
 # Supabase 設定
 # ==========================================
 
-SUPABASE_URL = "https://estqtbqbcmkddxkecgit.supabase.co"
-SUPABASE_KEY = "sb_publishable_Cu-NGY6jzc8dCth3CuYfyw_k6g7F0pM"
+SUPABASE_URL = "https://enwmhjywfwrnkknbfajt.supabase.co"
+SUPABASE_KEY = "sb_publishable_GsRvKbwlfUfObiTvVti1iQ_ix8J2lHz"
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 # ==========================================
@@ -137,6 +137,7 @@ def register():
         name = request.form.get('name')
         gender = request.form.get('gender')
         phone = request.form.get('phone')
+        birthday = request.form.get('birthday')
 
         try:
             # 2. 呼叫 Supabase 的註冊 API
@@ -149,6 +150,7 @@ def register():
                         "name": name,
                         "gender": gender,
                         "phone": phone,
+                        "birthday": birthday,
                     }
                 }
             })
@@ -187,6 +189,7 @@ def login():
             # [新增] 登入成功時，把 user_metadata 裡面的姓名與性別存入 Session
             user_meta = res.user.user_metadata or {}
             session['name'] = user_meta.get('name', res.user.email) # 若無姓名則顯示 email 作為備用
+            session['gender'] = user_meta.get('gender')
 
             # 顯示歡迎訊息並重定向到首頁
             flash(f'歡迎回來, {session["name"]}!', 'success')
@@ -220,6 +223,7 @@ def logout():
     # 顯示登出訊息並重定向到首頁
     flash('您已成功登出', 'info')
     return redirect(url_for('home'))
+
 
 if __name__ == "__main__":
     # 以除錯模式運行 Flask 應用程式，監聽端口 5002

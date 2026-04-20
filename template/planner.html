@@ -37,27 +37,23 @@
 </head>
 
 <body class="bg-slate-50 text-slate-800">
-    <nav id="nav-app" class="bg-white shadow-sm sticky top-0 z-50">
+    <nav class="bg-white shadow-sm sticky top-0 z-50">
         <div class="max-w-5xl mx-auto px-4 h-16 flex items-center justify-between">
             <a href="/" class="text-2xl font-bold text-blue-600">AI Travaler</a>
-            <nav class="bg-white shadow-sm sticky top-0 z-50">
-                <div class="max-w-5xl mx-auto px-4 h-16 flex items-center justify-between">
-                    <div class="space-x-6 font-medium">
-                        <a href="/" class="text-blue-600">首頁</a>
-                        <a href="/planner" class="hover:text-blue-600">行程規劃</a>
-                        <a href="/explore" class="hover:text-blue-600">探索景點</a>
-                        <a href="/favorites" class="hover:text-blue-600">我的收藏</a>
-                        <a href="/about" class="hover:text-blue-600">關於我們</a>
-                        {% if not user %}
-                        <a href="/login" class="hover:text-blue-600">登入</a>
-                        <a href="/register" class="hover:text-blue-600">註冊</a>
-                        {% else %}
-                        <span>歡迎, {{ name }}</span>
-                        <a href="/logout" class="hover:text-blue-600">登出</a>
-                        {% endif %}
-                    </div>
-                </div>
-            </nav>
+            <div class="space-x-6 font-medium">
+                <a href="/" class="text-blue-600">首頁</a>
+                <a href="/planner" class="hover:text-blue-600">行程規劃</a>
+                <a href="/explore" class="hover:text-blue-600">探索景點</a>
+                <a href="/favorites" class="hover:text-blue-600">我的收藏</a>
+                <a href="/about" class="hover:text-blue-600">關於我們</a>
+                {% if not user %}
+                <a href="/login" class="hover:text-blue-600">登入</a>
+                <a href="/register" class="hover:text-blue-600">註冊</a>
+                {% else %}
+                <span>歡迎, {{ name }}</span>
+                <a href="/logout" class="hover:text-blue-600">登出</a>
+                {% endif %}
+            </div>
         </div>
     </nav>
 
