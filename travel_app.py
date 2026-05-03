@@ -80,6 +80,16 @@ def about():
                            name=current_name,
                            gender=current_gender)
 
+@app.route("/recognize")
+def recognize():
+    current_user = session.get('user')
+    current_name = session.get('name')
+    current_gender = session.get('gender')
+    return render_template("recognize.html",
+                           user=current_user,
+                           name=current_name,
+                           gender=current_gender)
+
 # ==========================================
 # API：生成行程
 # ==========================================
