@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Travaler - 圖片辨識景點</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
+</head>
+
+<body class="bg-slate-50 text-slate-800">
+    <nav class="bg-white shadow-sm sticky top-0 z-50">
+        <div class="max-w-5xl mx-auto px-4 h-16 flex items-center justify-between">
+            <a href="/" class="text-2xl font-bold text-blue-600">AI Travaler</a>
+            <div class="space-x-6 font-medium">
+                <a href="/" class="text-blue-600">首頁</a>
+                <a href="/planner" class="hover:text-blue-600">行程規劃</a>
+                <a href="/explore" class="hover:text-blue-600">探索景點</a>
+                <a href="/recognize" class="hover:text-blue-600">圖片辨識</a>
+                <a href="/favorites" class="hover:text-blue-600">我的收藏</a>
+                <a href="/about" class="hover:text-blue-600">關於我們</a>
+                {% if not user %}
+                <a href="/login" class="hover:text-blue-600">登入</a>
+                <a href="/register" class="hover:text-blue-600">註冊</a>
+                {% else %}
+                <span>歡迎, {{ name }}</span>
+                <a href="/logout" class="hover:text-blue-600">登出</a>
+                {% endif %}
+            </div>
+        </div>
+    </nav>
+
+    <div id="app">
+        <section class="max-w-3xl mx-auto px-4 py-12">
+            <div class="text-center mb-10">
+                <h2 class="text-3xl font-bold mb-4">AI 視覺景點辨識</h2>
+                <p class="text-slate-500">上傳一張風景照，讓 AI 告訴你這是哪裡，並推薦相似景點</p>
+            </div>
+
+            <!-- 上傳區域 -->
+            <div class="bg-white p-8 rounded-3xl shadow-md mb-8">
+                <div @click="$refs.fileInput.click()" 
+                     class="border-2 border-dashed border-slate-200 rounded-2xl p-10 text-center cursor-pointer hover:border-blue-400 transition group">
+                    
+                    <input type="file" ref="fileInput" class="hidden" accept="image/*" @change="onFileChange">
+                    
+                    <div v-if="!imagePreview">
+                        <div class="text-5xl mb-4">📸</div>
+                        <p class="font-bold text-slate-600">點擊或拖曳圖片至此</p>
+                        <p class="text-xs text-slate-400 mt-2">支援 JPG, PNG 格式</p>
+                    </div>
+                    
+                    <img v-else :src="imagePreview" class="max-h-64 mx-auto rounded-xl shadow-sm">
+                </div>
+
+                <button @click="uploadImage" :disabled="!selectedFile || isAnalyzing"
+                    class="w-full mt-6 bg-blue-600 text-white py-4 rounded-xl font-bold hover:bg-blue-700 transition disabled:bg-slate-300">
+                    {% raw %}{{ isAnalyzing ? 'AI 正在辨識影像中...' : '開始辨識' }}{% endraw %}
+                </button>
+            </div>
+
+            <!-- 辨識結果 -->
+            <div v-if="isAnalyzing || result" class="bg-white p-8 rounded-3xl shadow-md animate-fade-in">
+                <div v-if="isAnalyzing" class="text-center py-10">
+                    <div class="inline-block animate-bounce text-4xl mb-4">🔍</div>
+                    <p class="text-slate-500 font-medium">正在分析圖片中的地標特徵...</p>
+                </div>
+
+                {% raw %}
+                <div v-else>
+                    <div class="flex items-center mb-6">
+                        <div class="bg-green-100 text-green-600 px-3 py-1 rounded-full text-sm font-bold mr-3">辨識成功</div>
+                        <h3 class="text-xl font-bold">辨識結果：{{ result.landmarkName }}</h3>
+                    </div>
+                    
+                    <p class="text-slate-600 mb-8">{{ result.description }}</p>
+
+                    <h4 class="font-bold mb-4 border-b pb-2">相似景點推薦</h4>
+                    <div class="grid grid-cols-1 gap-4">
+                        <div v-for="spot in result.similarSpots" :key="spot.name"
+                            class="flex items-center p-4 bg-slate-50 rounded-2xl">
+                            <div class="text-3xl mr-4">{{ spot.emoji }}</div>
+                            <div>
+                                <p class="font-bold">{{ spot.name }}</p>
+                                <p class="text-xs text-slate-400">{{ spot.reason }}</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                {% endraw %}
+            </div>
+        </section>
+    </div>
+
+    <script>
+        Vue.createApp({
+            setup() {
+                const selectedFile = Vue.ref(null);
+                const imagePreview = Vue.ref(null);
+                const isAnalyzing = Vue.ref(false);
+                const result = Vue.ref(null);
+
+                const onFileChange = (e) => {
+                    const file = e.target.files[0];
+                    if (!file) return;
+                    selectedFile.value = file;
+                    // 產生預覽圖
+                    imagePreview.value = URL.createObjectURL(file);
+                    result.value = null; // 重置結果
+                };
+
+                const uploadImage = async () => {
+                    isAnalyzing.value = true;
+                    
+                    // 準備上傳資料 (FormData 格式才能傳圖片檔案)
+                    const formData = new FormData();
+                    formData.append('image', selectedFile.value);
+
+                    try {
+                        const response = await fetch('/api/recognize_image', {
+                            method: 'POST',
+                            body: formData
+                        });
+                        const data = await response.json();
+                        if (response.ok) {
+                            result.value = data;
+                        } else {
+                            alert('辨識失敗');
+                        }
+                    } catch (error) {
+                        alert('網路連線異常');
+                    } finally {
+                        isAnalyzing.value = false;
+                    }
+                };
+
+                return { selectedFile, imagePreview, isAnalyzing, result, onFileChange, uploadImage };
+            }
+        }).mount('#app');
+    </script>
+</body>
+</html>

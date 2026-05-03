@@ -17,6 +17,7 @@
                 <a href="/" class="text-blue-600">首頁</a>
                 <a href="/planner" class="hover:text-blue-600">行程規劃</a>
                 <a href="/explore" class="hover:text-blue-600">探索景點</a>
+                <a href="/recognize" class="hover:text-blue-600">圖片辨識</a>
                 <a href="/favorites" class="hover:text-blue-600">我的收藏</a>
                 <a href="/about" class="hover:text-blue-600">關於我們</a>
                 {% if not user %}
@@ -32,28 +33,61 @@
 
     <div id="app">
         <section class="max-w-5xl mx-auto px-4 py-12">
-            <h2 class="text-3xl font-bold mb-8">熱門推薦景點</h2>
+            <div class="flex flex-col md:flex-row md:items-center justify-between mb-8 gap-4">
+                <h2 class="text-3xl font-bold">AI 隨機推薦</h2>
+                
+                <!-- 新增：類別選擇按鈕 -->
+                <div class="flex bg-white p-1 rounded-xl shadow-sm border border-slate-100">
+                    <button v-for="cat in categories" :key="cat.id"
+                        @click="changeCategory(cat.id)"
+                        :class="['px-6 py-2 rounded-lg text-sm font-bold transition', 
+                                currentCategory === cat.id ? 'bg-blue-600 text-white shadow-md' : 'text-slate-500 hover:bg-slate-50']">
+                        {% raw %}{{ cat.name }}{% endraw %}
+                    </button>
+                </div>
+            </div>
+
+            <!-- 加載狀態 -->
+            <div v-if="isLoading" class="flex justify-center py-20">
+                <div class="animate-spin rounded-full h-12 w-12 border-4 border-blue-600 border-t-transparent"></div>
+            </div>
+
             {% raw %}
-            <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
+            <div v-else class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
                 <div v-for="spot in exploreSpots" :key="spot.name"
-                    class="bg-white rounded-2xl overflow-hidden shadow-sm hover:shadow-md transition">
-                    <div class="h-48 bg-slate-200 flex items-center justify-center text-4xl">{{ spot.emoji }}</div>
-                    <div class="p-4">
+                    class="bg-white rounded-2xl overflow-hidden shadow-sm hover:shadow-md transition group">
+                    <div class="h-48 bg-slate-100 flex items-center justify-center text-5xl group-hover:scale-110 transition duration-500">
+                        {{ spot.emoji }}
+                    </div>
+                    <div class="p-5">
                         <div class="flex justify-between items-start mb-2">
                             <h3 class="font-bold text-lg">{{ spot.name }}</h3>
-                            <button @click="toggleFavorite(spot)" class="text-red-400 text-xl">{{ isFavorite(spot) ?
-                                '❤️' : '♡' }}</button>
+                            <button @click="toggleFavorite(spot)" class="text-red-400 text-xl hover:scale-120 transition">
+                                {{ isFavorite(spot) ? '❤️' : '♡' }}
+                            </button>
                         </div>
-                        <p class="text-slate-500 text-sm mb-4">{{ spot.desc }}</p>
-                        <span class="bg-slate-100 px-2 py-1 rounded text-xs text-slate-400"># {{ spot.tag }}</span>
+                        <p class="text-slate-500 text-sm mb-4 leading-relaxed">{{ spot.desc }}</p>
+                        <div class="flex items-center justify-between">
+                            <span class="bg-blue-50 px-2 py-1 rounded text-xs text-blue-500 font-bold"># {{ spot.tag }}</span>
+                            <span v-if="spot.rating" class="text-xs text-amber-500 font-bold">⭐ {{ spot.rating }}</span>
+                        </div>
                     </div>
                 </div>
             </div>
             {% endraw %}
+
+            <!-- 重新推薦按鈕 -->
+            <div class="mt-12 text-center">
+                <button @click="loadSpots" :disabled="isLoading"
+                    class="px-8 py-3 bg-slate-900 text-white rounded-2xl font-bold hover:bg-slate-800 transition shadow-lg active:scale-95 disabled:opacity-50">
+                    換一批推薦
+                </button>
+            </div>
         </section>
     </div>
 
     <script>
+        // 導航欄邏輯 (與原架構一致)
         Vue.createApp({
             setup() {
                 const favCount = Vue.ref(0);
@@ -67,24 +101,46 @@
             }
         }).mount('#nav-app');
 
+        // 頁面內容邏輯
         Vue.createApp({
             setup() {
                 const favorites = Vue.ref([]);
                 const exploreSpots = Vue.ref([]);
+                const isLoading = Vue.ref(false);
+                
+                // 類別設定
+                const currentCategory = Vue.ref('all');
+                const categories = [
+                    { id: 'all', name: '全部' },
+                    { id: 'attraction', name: '找景點' },
+                    { id: 'food', name: '找美食' }
+                ];
+
                 const loadSpots = async () => {
+                    isLoading.value = true;
                     try {
-                        const response = await fetch('/api/explore_spots');
+                        // 將當前類別傳送給後端 API
+                        const response = await fetch(`/api/explore_spots?category=${currentCategory.value}`);
                         const data = await response.json();
                         exploreSpots.value = data.spots;
                     } catch (error) {
-                        console.error('載入景點失敗:', error);
-                        // 備用數據
+                        console.error('載入失敗:', error);
+                        // 測試用備用數據
                         exploreSpots.value = [
-                            { name: '淺草寺', emoji: '🏮', tag: '歷史地標', desc: '東京最古老的寺廟。' },
-                            { name: '澀谷橫丁', emoji: '🍜', tag: '美食推薦', desc: '匯聚全日本美食。' }
+                            { name: '雷門', emoji: '⛩️', tag: '景點', desc: '充滿歷史感的紅色大燈籠。', rating: 4.8 },
+                            { name: '一蘭拉麵', emoji: '🍜', tag: '美食', desc: '豚骨拉麵的經典代表作。', rating: 4.5 },
+                            { name: '築地市場', emoji: '🍣', tag: '美食', desc: '最鮮美的海鮮生魚片都在這。', rating: 4.7 }
                         ];
+                    } finally {
+                        isLoading.value = false;
                     }
                 };
+
+                const changeCategory = (catId) => {
+                    currentCategory.value = catId;
+                    loadSpots();
+                };
+
                 const toggleFavorite = (spot) => {
                     const idx = favorites.value.findIndex(f => f.name === spot.name);
                     if (idx > -1) favorites.value.splice(idx, 1);
@@ -92,13 +148,26 @@
                     localStorage.setItem('my_travel_favorites', JSON.stringify(favorites.value));
                     window.dispatchEvent(new Event('fav-updated'));
                 };
+
                 const isFavorite = (spot) => favorites.value.some(f => f.name === spot.name);
+
                 Vue.onMounted(() => {
                     loadSpots();
                     const saved = localStorage.getItem('my_travel_favorites');
                     if (saved) favorites.value = JSON.parse(saved);
                 });
-                return { exploreSpots, favorites, toggleFavorite, isFavorite };
+
+                return { 
+                    exploreSpots, 
+                    favorites, 
+                    toggleFavorite, 
+                    isFavorite, 
+                    isLoading, 
+                    categories, 
+                    currentCategory, 
+                    changeCategory,
+                    loadSpots
+                };
             }
         }).mount('#app');
     </script>
