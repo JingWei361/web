@@ -1,0 +1,4 @@
+flask          # 如果你用 Flask
+gunicorn       # 強烈建議加上，用於啟動服務
+supabase
+werkzeug

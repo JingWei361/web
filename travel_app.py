@@ -7,7 +7,7 @@ from supabase import create_client, Client
 import json
 
 
-app = Flask(__name__, template_folder='template')
+app = Flask(__name__, template_folder='templates')
 app.secret_key = 'ai_traveler_secret_key_2026'
 
 # ==========================================
@@ -235,6 +235,11 @@ def logout():
     return redirect(url_for('home'))
 
 
+# ==========================================
+# 啟動區塊
+# ==========================================
 if __name__ == "__main__":
-    # 以除錯模式運行 Flask 應用程式，監聽端口 5002
-    app.run(debug=True, port=5002)
+    # Render 會提供 PORT 環境變數，若無則預設 5002
+    port = int(os.environ.get("PORT", 5002))
+    # 生產環境中 debug 應設為 False，但在 Render 介面可透過環境變數控制
+    app.run(host='0.0.0.0', port=port)
