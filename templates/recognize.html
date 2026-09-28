@@ -7,13 +7,16 @@
     <title>AI Travaler - 圖片辨識景點</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
+    <link rel="stylesheet" href="{{ url_for('static', filename='responsive.css') }}">
 </head>
 
 <body class="bg-slate-50 text-slate-800">
-    <nav class="bg-white shadow-sm sticky top-0 z-50">
-        <div class="max-w-5xl mx-auto px-4 h-16 flex items-center justify-between">
-            <a href="/" class="text-2xl font-bold text-blue-600">AI Travaler</a>
-            <div class="space-x-6 font-medium">
+    <header class="site-header">
+        <nav class="site-nav">
+            <a href="/" class="site-brand text-2xl font-bold text-blue-600">AI Travaler</a>
+            <label class="nav-toggle-label" for="nav-toggle" aria-label="開啟導覽選單">☰</label>
+            <input class="nav-toggle" id="nav-toggle" type="checkbox">
+            <div class="nav-links font-medium">
                 <a href="/" class="text-blue-600">首頁</a>
                 <a href="/planner" class="hover:text-blue-600">行程規劃</a>
                 <a href="/explore" class="hover:text-blue-600">探索景點</a>
@@ -28,8 +31,8 @@
                 <a href="/logout" class="hover:text-blue-600">登出</a>
                 {% endif %}
             </div>
-        </div>
-    </nav>
+        </nav>
+    </header>
 
     <div id="app">
         <section class="max-w-3xl mx-auto px-4 py-12">

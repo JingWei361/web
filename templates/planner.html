@@ -7,6 +7,7 @@
     <title>AI Travaler - 行程規劃</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
+    <link rel="stylesheet" href="{{ url_for('static', filename='responsive.css') }}">
     <style>
         .loading-dots:after {
             content: ' .';
@@ -37,10 +38,12 @@
 </head>
 
 <body class="bg-slate-50 text-slate-800">
-    <nav class="bg-white shadow-sm sticky top-0 z-50">
-        <div class="max-w-5xl mx-auto px-4 h-16 flex items-center justify-between">
-            <a href="/" class="text-2xl font-bold text-blue-600">AI Travaler</a>
-            <div class="space-x-6 font-medium">
+    <header class="site-header">
+        <nav class="site-nav">
+            <a href="/" class="site-brand text-2xl font-bold text-blue-600">AI Travaler</a>
+            <label class="nav-toggle-label" for="nav-toggle" aria-label="開啟導覽選單">☰</label>
+            <input class="nav-toggle" id="nav-toggle" type="checkbox">
+            <div class="nav-links font-medium">
                 <a href="/" class="text-blue-600">首頁</a>
                 <a href="/planner" class="hover:text-blue-600">行程規劃</a>
                 <a href="/explore" class="hover:text-blue-600">探索景點</a>
@@ -55,8 +58,8 @@
                 <a href="/logout" class="hover:text-blue-600">登出</a>
                 {% endif %}
             </div>
-        </div>
-    </nav>
+        </nav>
+    </header>
 
     <!-- 保持導航欄不變 -->
 <div id="app">
@@ -65,7 +68,7 @@
             <h2 class="text-2xl font-bold mb-6">告訴 AI 你的計畫</h2>
             
             <!-- 第一排：目的地 & 天數 -->
-            <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
                 <div>
                     <label class="block text-sm font-medium text-slate-600 mb-1">目的地</label>
                     <input v-model="form.city" type="text" placeholder="例如：東京、首爾..."
@@ -74,6 +77,11 @@
                 <div>
                     <label class="block text-sm font-medium text-slate-600 mb-1">旅行天數</label>
                     <input v-model.number="form.days" type="number" min="1" max="30" placeholder="要玩幾天？"
+                        class="w-full border border-slate-200 rounded-xl px-4 py-2 focus:ring-2 focus:ring-blue-500 outline-none">
+                </div>
+                <div>
+                    <label class="block text-sm font-medium text-slate-600 mb-1">出發日期</label>
+                    <input v-model="form.startDate" :min="today" type="date" required
                         class="w-full border border-slate-200 rounded-xl px-4 py-2 focus:ring-2 focus:ring-blue-500 outline-none">
                 </div>
             </div>
@@ -103,9 +111,104 @@
             </button>
         </div>
 
-        <!-- 行程結果區域 (保持原本架構) -->
-        <div v-if="isGenerating || itinerary" class="bg-white p-8 rounded-3xl shadow-md">
-            <!-- ... 原本的結果顯示代碼 ... -->
+        <!-- 行程結果與旅遊資訊區域 -->
+        <div v-if="isGenerating || itinerary || insights" class="space-y-6">
+            <div v-if="isGenerating" class="bg-white p-8 rounded-3xl shadow-md text-center text-slate-500">
+                AI 正在整理行程與旅遊資訊<span class="loading-dots"></span>
+            </div>
+
+            {% raw %}
+            <div v-if="itinerary" class="bg-white p-8 rounded-3xl shadow-md">
+                <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-6">
+                    <h3 class="text-xl font-bold">你的行程</h3>
+                    <span class="text-sm text-slate-500">可刪除不需要的行程日</span>
+                </div>
+                <div class="space-y-3">
+                    <article v-for="(day, index) in itinerary" :key="`${day.day}-${index}`"
+                        class="border border-slate-100 rounded-2xl p-4 flex flex-col sm:flex-row sm:items-center gap-3">
+                        <div class="min-w-20 font-bold text-blue-600">第 {{ day.day }} 天</div>
+                        <div v-if="editingIndex !== index" class="flex-1">
+                            <p class="font-semibold">{{ day.title }}</p>
+                            <p class="text-xs text-blue-500 mb-1">{{ day.date || '日期未設定' }}</p>
+                            <p class="text-sm text-slate-500">{{ day.activities.join('、') }}</p>
+                        </div>
+                        <div v-else class="flex-1 space-y-2">
+                            <input v-model="editDraft.title" type="text"
+                                class="w-full border border-blue-200 rounded-lg px-3 py-2 outline-none focus:ring-2 focus:ring-blue-500">
+                            <textarea v-model="editDraft.activitiesText" rows="2"
+                                class="w-full border border-blue-200 rounded-lg px-3 py-2 outline-none focus:ring-2 focus:ring-blue-500"
+                                placeholder="每個活動用逗號分隔"></textarea>
+                        </div>
+                        <div v-if="editingIndex !== index" class="flex gap-3 self-start sm:self-auto">
+                            <button @click="startEdit(day, index)" type="button"
+                                class="text-sm text-blue-600 hover:text-blue-800">編輯</button>
+                            <button @click="removeDay(index)" type="button"
+                                class="text-sm text-red-500 hover:text-red-700">刪除</button>
+                        </div>
+                        <div v-else class="flex gap-3 self-start sm:self-auto">
+                            <button @click="saveEdit(index)" type="button"
+                                class="text-sm text-green-600 hover:text-green-800">儲存</button>
+                            <button @click="cancelEdit" type="button"
+                                class="text-sm text-slate-500 hover:text-slate-700">取消</button>
+                        </div>
+                    </article>
+                </div>
+            </div>
+
+            <div v-if="itinerary" class="bg-white p-8 rounded-3xl shadow-md">
+                <h3 class="text-xl font-bold mb-4">行程臨時變更</h3>
+                <div class="flex flex-col sm:flex-row gap-3">
+                    <select v-model.number="targetDay" class="border border-slate-200 rounded-xl px-4 py-3 outline-none">
+                        <option v-for="day in itinerary" :key="day.day" :value="day.day">第 {{ day.day }} 天 · {{ day.date || '日期未設定' }}</option>
+                    </select>
+                    <select v-model="changeReason" class="flex-1 border border-slate-200 rounded-xl px-4 py-3 outline-none">
+                        <option value="下雨">下雨</option>
+                        <option value="交通延誤">交通延誤</option>
+                        <option value="景點休息">景點休息</option>
+                        <option value="時間不足">時間不足</option>
+                        <option value="不想去">臨時不想去</option>
+                    </select>
+                    <button @click="replanItinerary" :disabled="isReplanning" type="button"
+                        class="bg-amber-500 text-white px-5 py-3 rounded-xl font-bold hover:bg-amber-600 disabled:bg-slate-300">
+                        {{ isReplanning ? '重新安排中...' : '重新安排未完成行程' }}
+                    </button>
+                </div>
+                <p v-if="replanMessage" class="text-sm text-green-600 mt-3">{{ replanMessage }}</p>
+            </div>
+
+            <div v-if="insights" class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                <div class="bg-white p-6 rounded-3xl shadow-md">
+                    <h3 class="font-bold text-lg mb-4">天氣預報</h3>
+                    <div class="space-y-3">
+                        <div v-for="weather in insights.weather" :key="weather.day" class="flex justify-between text-sm">
+                            <span>第 {{ weather.day }} 天 · {{ weather.date }} · {{ weather.condition }}</span>
+                            <span class="text-slate-500">{{ weather.temperature }} / 雨 {{ weather.rain }}%</span>
+                        </div>
+                    </div>
+                </div>
+                <div class="bg-white p-6 rounded-3xl shadow-md">
+                    <h3 class="font-bold text-lg mb-4">交通與住宿</h3>
+                    <p class="text-sm text-slate-600 mb-3">{{ insights.transport.summary }}</p>
+                    <p class="text-sm text-slate-500 mb-4">{{ insights.transport.tip }}</p>
+                    <div class="border-t pt-3 text-sm">
+                        <p><strong>住宿區域：</strong>{{ insights.accommodation.area }}</p>
+                        <p><strong>每晚預估：</strong>TWD {{ insights.accommodation.nightlyBudget }}</p>
+                    </div>
+                </div>
+                <div class="bg-white p-6 rounded-3xl shadow-md">
+                    <h3 class="font-bold text-lg mb-4">AI 預算配置</h3>
+                    <div class="space-y-2 text-sm">
+                        <p class="flex justify-between"><span>住宿</span><strong>TWD {{ insights.budget.hotel }}</strong></p>
+                        <p class="flex justify-between"><span>交通</span><strong>TWD {{ insights.budget.transport }}</strong></p>
+                        <p class="flex justify-between"><span>餐飲</span><strong>TWD {{ insights.budget.food }}</strong></p>
+                        <p class="flex justify-between"><span>門票</span><strong>TWD {{ insights.budget.tickets }}</strong></p>
+                        <p class="flex justify-between"><span>預備金</span><strong>TWD {{ insights.budget.reserve }}</strong></p>
+                        <p class="flex justify-between border-t pt-2 text-base"><span>預估總額</span><strong>TWD {{ insights.budget.total }}</strong></p>
+                    </div>
+                    <p class="text-xs mt-4" :class="insights.budget.withinBudget ? 'text-green-600' : 'text-red-600'">{{ insights.budget.message }}</p>
+                </div>
+            </div>
+            {% endraw %}
         </div>
     </section>
 </div>
@@ -114,14 +217,28 @@
     // 頁面內容邏輯
     Vue.createApp({
         setup() {
+            const getLocalDate = () => {
+                const date = new Date();
+                const localDate = new Date(date.getTime() - date.getTimezoneOffset() * 60000);
+                return localDate.toISOString().slice(0, 10);
+            };
+            const today = getLocalDate();
             const isGenerating = Vue.ref(false);
             const itinerary = Vue.ref(null);
+            const insights = Vue.ref(null);
             const favorites = Vue.ref([]);
+            const isReplanning = Vue.ref(false);
+            const changeReason = Vue.ref('下雨');
+            const targetDay = Vue.ref(1);
+            const replanMessage = Vue.ref('');
+            const editingIndex = Vue.ref(-1);
+            const editDraft = Vue.reactive({ title: '', activitiesText: '' });
             
             // 更新 form 物件增加 budget 與 style
             const form = Vue.reactive({ 
                 city: '', 
                 days: 1, 
+                startDate: today,
                 budget: '', 
                 style: 'balanced' 
             });
@@ -133,6 +250,8 @@
                 
                 isGenerating.value = true;
                 itinerary.value = null;
+                insights.value = null;
+                replanMessage.value = '';
 
                 try {
                     const response = await fetch('/api/generate_itinerary', {
@@ -142,6 +261,7 @@
                         body: JSON.stringify({ 
                             city: form.city, 
                             days: form.days,
+                            startDate: form.startDate,
                             budget: form.budget,
                             style: form.style
                         })
@@ -149,6 +269,9 @@
                     const data = await response.json();
                     if (response.ok) {
                         itinerary.value = data.itinerary;
+                        if (itinerary.value.length) targetDay.value = itinerary.value[0].day;
+                        saveItinerary();
+                        await loadInsights();
                     } else {
                         alert(data.error || '生成失敗');
                     }
@@ -156,6 +279,73 @@
                     alert('網路錯誤，請稍後再試');
                 }
                 isGenerating.value = false;
+            };
+
+            const loadInsights = async () => {
+                const response = await fetch('/api/trip_insights', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ city: form.city, days: form.days, startDate: form.startDate, budget: form.budget })
+                });
+                const data = await response.json();
+                if (response.ok) insights.value = data;
+            };
+
+            const replanItinerary = async () => {
+                isReplanning.value = true;
+                replanMessage.value = '';
+                try {
+                    const response = await fetch('/api/replan', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            city: form.city,
+                            targetDay: targetDay.value,
+                            reason: changeReason.value,
+                            itinerary: itinerary.value
+                        })
+                    });
+                    const data = await response.json();
+                    if (!response.ok) throw new Error(data.error || '重新安排失敗');
+                    itinerary.value = data.itinerary;
+                    saveItinerary();
+                    replanMessage.value = data.message;
+                } catch (error) {
+                    replanMessage.value = error.message;
+                } finally {
+                    isReplanning.value = false;
+                }
+            };
+
+            const removeDay = (index) => {
+                itinerary.value.splice(index, 1);
+                if (itinerary.value.length) targetDay.value = itinerary.value[0].day;
+                saveItinerary();
+            };
+
+            const saveItinerary = () => {
+                localStorage.setItem('my_travel_itinerary', JSON.stringify(itinerary.value || []));
+            };
+
+            const startEdit = (day, index) => {
+                editingIndex.value = index;
+                editDraft.title = day.title;
+                editDraft.activitiesText = day.activities.join(', ');
+            };
+
+            const saveEdit = (index) => {
+                const activities = editDraft.activitiesText
+                    .split(',')
+                    .map(activity => activity.trim())
+                    .filter(Boolean);
+                itinerary.value[index].title = editDraft.title.trim() || itinerary.value[index].title;
+                itinerary.value[index].activities = activities.length ? activities : ['自由活動'];
+                editingIndex.value = -1;
+                saveItinerary();
+            };
+
+            const cancelEdit = () => {
+                editingIndex.value = -1;
             };
 
             const toggleFavorite = (spot) => {
@@ -168,11 +358,24 @@
             const isFavorite = (spot) => favorites.value.some(f => f.name === spot.name);
             
             Vue.onMounted(() => {
+                const savedItinerary = localStorage.getItem('my_travel_itinerary');
+                if (savedItinerary) {
+                    try {
+                        const parsedItinerary = JSON.parse(savedItinerary);
+                        if (Array.isArray(parsedItinerary) && parsedItinerary.length) {
+                            itinerary.value = parsedItinerary;
+                        }
+                    } catch (error) {
+                        localStorage.removeItem('my_travel_itinerary');
+                    }
+                }
                 const saved = localStorage.getItem('my_travel_favorites');
                 if (saved) favorites.value = JSON.parse(saved);
             });
 
-            return { form, isGenerating, itinerary, toggleFavorite, isFavorite, generateItinerary };
+            return { form, today, isGenerating, itinerary, insights, isReplanning, targetDay, changeReason, replanMessage,
+                editingIndex, editDraft, toggleFavorite, isFavorite, generateItinerary, replanItinerary,
+                removeDay, startEdit, saveEdit, cancelEdit };
         }
     }).mount('#app');
 </script>
