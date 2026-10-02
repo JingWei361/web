@@ -59,20 +59,6 @@
             </div>
         </div>
     </section>
-    <script>
-        Vue.createApp({
-            setup() {
-                const favCount = Vue.ref(0);
-                const refresh = () => {
-                    const data = localStorage.getItem('my_travel_favorites');
-                    favCount.value = data ? JSON.parse(data).length : 0;
-                };
-                Vue.onMounted(refresh);
-                window.addEventListener('storage', refresh);
-                return { favCount };
-            }
-        }).mount('#nav-app');
-    </script>
 </body>
 
 </html>

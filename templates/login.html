@@ -36,6 +36,16 @@
     <div class="min-h-screen flex items-center justify-center">
         <div class="bg-white p-8 rounded-3xl shadow-md w-full max-w-md">
             <h2 class="text-2xl font-bold mb-6 text-center">登入</h2>
+            {% with messages = get_flashed_messages(with_categories=true) %}
+            {% if messages %}
+            {% for category, message in messages %}
+            <div
+                class="mb-4 rounded-xl px-4 py-3 text-sm {{ 'bg-red-50 text-red-700' if category == 'danger' else 'bg-amber-50 text-amber-700' if category == 'warning' else 'bg-blue-50 text-blue-700' }}">
+                {{ message }}
+            </div>
+            {% endfor %}
+            {% endif %}
+            {% endwith %}
             <form method="POST">
                 <div class="mb-4">
                     <label class="block text-sm font-medium text-slate-600 mb-1">信箱</label>

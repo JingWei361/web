@@ -43,17 +43,17 @@
 
             <!-- 上傳區域 -->
             <div class="bg-white p-8 rounded-3xl shadow-md mb-8">
-                <div @click="$refs.fileInput.click()" 
-                     class="border-2 border-dashed border-slate-200 rounded-2xl p-10 text-center cursor-pointer hover:border-blue-400 transition group">
-                    
+                <div @click="$refs.fileInput.click()"
+                    class="border-2 border-dashed border-slate-200 rounded-2xl p-10 text-center cursor-pointer hover:border-blue-400 transition group">
+
                     <input type="file" ref="fileInput" class="hidden" accept="image/*" @change="onFileChange">
-                    
+
                     <div v-if="!imagePreview">
                         <div class="text-5xl mb-4">📸</div>
                         <p class="font-bold text-slate-600">點擊或拖曳圖片至此</p>
                         <p class="text-xs text-slate-400 mt-2">支援 JPG, PNG 格式</p>
                     </div>
-                    
+
                     <img v-else :src="imagePreview" class="max-h-64 mx-auto rounded-xl shadow-sm">
                 </div>
 
@@ -73,10 +73,11 @@
                 {% raw %}
                 <div v-else>
                     <div class="flex items-center mb-6">
-                        <div class="bg-green-100 text-green-600 px-3 py-1 rounded-full text-sm font-bold mr-3">辨識成功</div>
+                        <div class="bg-green-100 text-green-600 px-3 py-1 rounded-full text-sm font-bold mr-3">辨識成功
+                        </div>
                         <h3 class="text-xl font-bold">辨識結果：{{ result.landmarkName }}</h3>
                     </div>
-                    
+
                     <p class="text-slate-600 mb-8">{{ result.description }}</p>
 
                     <h4 class="font-bold mb-4 border-b pb-2">相似景點推薦</h4>
@@ -84,10 +85,15 @@
                         <div v-for="spot in result.similarSpots" :key="spot.name"
                             class="flex items-center p-4 bg-slate-50 rounded-2xl">
                             <div class="text-3xl mr-4">{{ spot.emoji }}</div>
-                            <div>
+                            <div class="flex-1">
                                 <p class="font-bold">{{ spot.name }}</p>
                                 <p class="text-xs text-slate-400">{{ spot.reason }}</p>
                             </div>
+                            <button @click="toggleFavorite(spot)" type="button"
+                                class="text-red-400 text-xl hover:scale-110 transition"
+                                :aria-label="isFavorite(spot) ? '取消收藏' : '收藏景點'">
+                                {{ isFavorite(spot) ? '❤️' : '♡' }}
+                            </button>
                         </div>
                     </div>
                 </div>
@@ -99,48 +105,92 @@
     <script>
         Vue.createApp({
             setup() {
-                const selectedFile = Vue.ref(null);
-                const imagePreview = Vue.ref(null);
-                const isAnalyzing = Vue.ref(false);
-                const result = Vue.ref(null);
+                const isAuthenticated = {% if user %}true{% else %}false{% endif %};
+        const selectedFile = Vue.ref(null);
+        const imagePreview = Vue.ref(null);
+        const isAnalyzing = Vue.ref(false);
+        const result = Vue.ref(null);
+        const favorites = Vue.ref([]);
 
-                const onFileChange = (e) => {
-                    const file = e.target.files[0];
-                    if (!file) return;
-                    selectedFile.value = file;
-                    // 產生預覽圖
-                    imagePreview.value = URL.createObjectURL(file);
-                    result.value = null; // 重置結果
-                };
+        const onFileChange = (e) => {
+            const file = e.target.files[0];
+            if (!file) return;
+            selectedFile.value = file;
+            // 產生預覽圖
+            imagePreview.value = URL.createObjectURL(file);
+            result.value = null; // 重置結果
+        };
 
-                const uploadImage = async () => {
-                    isAnalyzing.value = true;
-                    
-                    // 準備上傳資料 (FormData 格式才能傳圖片檔案)
-                    const formData = new FormData();
-                    formData.append('image', selectedFile.value);
+        const uploadImage = async () => {
+            isAnalyzing.value = true;
 
-                    try {
-                        const response = await fetch('/api/recognize_image', {
-                            method: 'POST',
-                            body: formData
-                        });
-                        const data = await response.json();
-                        if (response.ok) {
-                            result.value = data;
-                        } else {
-                            alert('辨識失敗');
-                        }
-                    } catch (error) {
-                        alert('網路連線異常');
-                    } finally {
-                        isAnalyzing.value = false;
-                    }
-                };
+            // 準備上傳資料 (FormData 格式才能傳圖片檔案)
+            const formData = new FormData();
+            formData.append('image', selectedFile.value);
 
-                return { selectedFile, imagePreview, isAnalyzing, result, onFileChange, uploadImage };
+            try {
+                const response = await fetch('/api/recognize_image', {
+                    method: 'POST',
+                    body: formData
+                });
+                const data = await response.json();
+                if (response.ok) {
+                    result.value = data;
+                } else {
+                    alert('辨識失敗');
+                }
+            } catch (error) {
+                alert('網路連線異常');
+            } finally {
+                isAnalyzing.value = false;
+            }
+        };
+
+        const loadFavorites = async () => {
+            if (!isAuthenticated) return;
+            const response = await fetch('/api/favorites');
+            if (response.ok) {
+                const data = await response.json();
+                favorites.value = data.favorites || [];
+            }
+        };
+
+        const toggleFavorite = async (spot) => {
+            if (!isAuthenticated) {
+                window.location.href = '/login';
+                return;
+            }
+            const existing = favorites.value.find(favorite => favorite.name === spot.name);
+            const response = existing
+                ? await fetch(`/api/favorites/${existing.recommendationId}`, { method: 'DELETE' })
+                : await fetch('/api/favorites', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        name: spot.name,
+                        emoji: spot.emoji,
+                        desc: spot.reason,
+                        tag: '辨識推薦'
+                    })
+                });
+            const data = await response.json();
+            if (!response.ok) {
+                alert(data.error || '收藏操作失敗');
+                return;
+            }
+            favorites.value = existing
+                ? favorites.value.filter(favorite => favorite.name !== spot.name)
+                : [...favorites.value, data.favorite];
+        };
+
+        const isFavorite = (spot) => favorites.value.some(favorite => favorite.name === spot.name);
+
+        Vue.onMounted(loadFavorites);
+
+        return { selectedFile, imagePreview, isAnalyzing, result, onFileChange, uploadImage, toggleFavorite, isFavorite };
             }
         }).mount('#app');
     </script>
 </body>
+
 </html>

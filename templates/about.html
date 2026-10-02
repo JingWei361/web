@@ -6,7 +6,6 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>AI Travaler - 關於我們</title>
     <script src="https://cdn.tailwindcss.com"></script>
-    <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
     <link rel="stylesheet" href="{{ url_for('static', filename='responsive.css') }}">
 </head>
 
@@ -40,35 +39,21 @@
         <div class="grid grid-cols-1 md:grid-cols-3 gap-8">
             <div class="bg-white p-6 rounded-2xl shadow-sm border border-slate-100">
                 <div class="text-4xl mb-4">👨‍💻</div>
-                <h4 class="font-bold">組長:</h4>
-                <p class="text-slate-400 text-xs mt-2">負責：</p>
+                <h4 class="font-bold">組長</h4>
+                <p class="text-slate-400 text-xs mt-2">負責:陳璟葳</p>
             </div>
             <div class="bg-white p-6 rounded-2xl shadow-sm border border-slate-100">
                 <div class="text-4xl mb-4">🤖</div>
                 <h4 class="font-bold">組員 </h4>
-                <p class="text-slate-400 text-xs mt-2">負責：</p>
+                <p class="text-slate-400 text-xs mt-2">負責：廖姮雅、呂佾蒨</p>
             </div>
             <div class="bg-white p-6 rounded-2xl shadow-sm border border-slate-100">
                 <div class="text-4xl mb-4">🎨</div>
                 <h4 class="font-bold">組員</h4>
-                <p class="text-slate-400 text-xs mt-2">負責：</p>
+                <p class="text-slate-400 text-xs mt-2">負責：卓靖螢</p>
             </div>
     </section>
 
-    <script>
-        Vue.createApp({
-            setup() {
-                const favCount = Vue.ref(0);
-                const refresh = () => {
-                    const data = localStorage.getItem('my_travel_favorites');
-                    favCount.value = data ? JSON.parse(data).length : 0;
-                };
-                Vue.onMounted(refresh);
-                window.addEventListener('storage', refresh);
-                return { favCount };
-            }
-        }).mount('#nav-app');
-    </script>
 </body>
 
 </html>

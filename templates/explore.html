@@ -38,11 +38,10 @@
         <section class="max-w-5xl mx-auto px-4 py-12">
             <div class="flex flex-col md:flex-row md:items-center justify-between mb-8 gap-4">
                 <h2 class="text-3xl font-bold">AI 隨機推薦</h2>
-                
+
                 <!-- 新增：類別選擇按鈕 -->
                 <div class="flex bg-white p-1 rounded-xl shadow-sm border border-slate-100">
-                    <button v-for="cat in categories" :key="cat.id"
-                        @click="changeCategory(cat.id)"
+                    <button v-for="cat in categories" :key="cat.id" @click="changeCategory(cat.id)"
                         :class="['px-6 py-2 rounded-lg text-sm font-bold transition', 
                                 currentCategory === cat.id ? 'bg-blue-600 text-white shadow-md' : 'text-slate-500 hover:bg-slate-50']">
                         {% raw %}{{ cat.name }}{% endraw %}
@@ -59,19 +58,22 @@
             <div v-else class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
                 <div v-for="spot in exploreSpots" :key="spot.name"
                     class="bg-white rounded-2xl overflow-hidden shadow-sm hover:shadow-md transition group">
-                    <div class="h-48 bg-slate-100 flex items-center justify-center text-5xl group-hover:scale-110 transition duration-500">
+                    <div
+                        class="h-48 bg-slate-100 flex items-center justify-center text-5xl group-hover:scale-110 transition duration-500">
                         {{ spot.emoji }}
                     </div>
                     <div class="p-5">
                         <div class="flex justify-between items-start mb-2">
                             <h3 class="font-bold text-lg">{{ spot.name }}</h3>
-                            <button @click="toggleFavorite(spot)" class="text-red-400 text-xl hover:scale-120 transition">
+                            <button @click="toggleFavorite(spot)"
+                                class="text-red-400 text-xl hover:scale-120 transition">
                                 {{ isFavorite(spot) ? '❤️' : '♡' }}
                             </button>
                         </div>
                         <p class="text-slate-500 text-sm mb-4 leading-relaxed">{{ spot.desc }}</p>
                         <div class="flex items-center justify-between">
-                            <span class="bg-blue-50 px-2 py-1 rounded text-xs text-blue-500 font-bold"># {{ spot.tag }}</span>
+                            <span class="bg-blue-50 px-2 py-1 rounded text-xs text-blue-500 font-bold"># {{ spot.tag
+                                }}</span>
                             <span v-if="spot.rating" class="text-xs text-amber-500 font-bold">⭐ {{ spot.rating }}</span>
                         </div>
                     </div>
@@ -85,93 +87,114 @@
                     class="px-8 py-3 bg-slate-900 text-white rounded-2xl font-bold hover:bg-slate-800 transition shadow-lg active:scale-95 disabled:opacity-50">
                     換一批推薦
                 </button>
+                {% if not user %}
+                <p class="mt-3 text-sm text-slate-500">登入後即可將推薦景點同步到我的收藏。</p>
+                {% endif %}
             </div>
         </section>
     </div>
 
     <script>
-        // 導航欄邏輯 (與原架構一致)
-        Vue.createApp({
-            setup() {
-                const favCount = Vue.ref(0);
-                const refresh = () => {
-                    const data = localStorage.getItem('my_travel_favorites');
-                    favCount.value = data ? JSON.parse(data).length : 0;
-                };
-                Vue.onMounted(refresh);
-                window.addEventListener('fav-updated', refresh);
-                return { favCount };
-            }
-        }).mount('#nav-app');
-
         // 頁面內容邏輯
         Vue.createApp({
             setup() {
-                const favorites = Vue.ref([]);
-                const exploreSpots = Vue.ref([]);
-                const isLoading = Vue.ref(false);
-                
-                // 類別設定
-                const currentCategory = Vue.ref('all');
-                const categories = [
-                    { id: 'all', name: '全部' },
-                    { id: 'attraction', name: '找景點' },
-                    { id: 'food', name: '找美食' }
-                ];
+                const isAuthenticated = {% if user %}true{% else %}false{% endif %};
+        const favorites = Vue.ref([]);
+        const exploreSpots = Vue.ref([]);
+        const isLoading = Vue.ref(false);
 
-                const loadSpots = async () => {
-                    isLoading.value = true;
-                    try {
-                        // 將當前類別傳送給後端 API
-                        const response = await fetch(`/api/explore_spots?category=${currentCategory.value}`);
-                        const data = await response.json();
-                        exploreSpots.value = data.spots;
-                    } catch (error) {
-                        console.error('載入失敗:', error);
-                        // 測試用備用數據
-                        exploreSpots.value = [
-                            { name: '雷門', emoji: '⛩️', tag: '景點', desc: '充滿歷史感的紅色大燈籠。', rating: 4.8 },
-                            { name: '一蘭拉麵', emoji: '🍜', tag: '美食', desc: '豚骨拉麵的經典代表作。', rating: 4.5 },
-                            { name: '築地市場', emoji: '🍣', tag: '美食', desc: '最鮮美的海鮮生魚片都在這。', rating: 4.7 }
-                        ];
-                    } finally {
-                        isLoading.value = false;
-                    }
-                };
+        // 類別設定
+        const currentCategory = Vue.ref('all');
+        const categories = [
+            { id: 'all', name: '全部' },
+            { id: 'attraction', name: '找景點' },
+            { id: 'food', name: '找美食' }
+        ];
 
-                const changeCategory = (catId) => {
-                    currentCategory.value = catId;
-                    loadSpots();
-                };
-
-                const toggleFavorite = (spot) => {
-                    const idx = favorites.value.findIndex(f => f.name === spot.name);
-                    if (idx > -1) favorites.value.splice(idx, 1);
-                    else favorites.value.push(spot);
-                    localStorage.setItem('my_travel_favorites', JSON.stringify(favorites.value));
-                    window.dispatchEvent(new Event('fav-updated'));
-                };
-
-                const isFavorite = (spot) => favorites.value.some(f => f.name === spot.name);
-
-                Vue.onMounted(() => {
-                    loadSpots();
-                    const saved = localStorage.getItem('my_travel_favorites');
-                    if (saved) favorites.value = JSON.parse(saved);
-                });
-
-                return { 
-                    exploreSpots, 
-                    favorites, 
-                    toggleFavorite, 
-                    isFavorite, 
-                    isLoading, 
-                    categories, 
-                    currentCategory, 
-                    changeCategory,
-                    loadSpots
-                };
+        const loadFavorites = async () => {
+            if (!isAuthenticated) return;
+            const response = await fetch('/api/favorites');
+            if (response.ok) {
+                const data = await response.json();
+                favorites.value = data.favorites || [];
             }
+        };
+
+        const loadSpots = async () => {
+            isLoading.value = true;
+            try {
+                if (isAuthenticated) {
+                    await fetch('/api/search_history', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ searchQuery: currentCategory.value, filters: { category: currentCategory.value } })
+                    });
+                }
+                const response = await fetch(`/api/explore_spots?category=${currentCategory.value}`);
+                const data = await response.json();
+                exploreSpots.value = data.spots;
+            } catch (error) {
+                console.error('載入失敗:', error);
+                // 測試用備用數據
+                exploreSpots.value = [
+                    { name: '雷門', emoji: '⛩️', tag: '景點', desc: '充滿歷史感的紅色大燈籠。', rating: 4.8 },
+                    { name: '一蘭拉麵', emoji: '🍜', tag: '美食', desc: '豚骨拉麵的經典代表作。', rating: 4.5 },
+                    { name: '築地市場', emoji: '🍣', tag: '美食', desc: '最鮮美的海鮮生魚片都在這。', rating: 4.7 }
+                ];
+            } finally {
+                isLoading.value = false;
+            }
+        };
+
+        const changeCategory = (catId) => {
+            currentCategory.value = catId;
+            loadSpots();
+        };
+
+        const toggleFavorite = async (spot) => {
+            if (!isAuthenticated) {
+                window.location.href = '/login';
+                return;
+            }
+            const existing = favorites.value.find(f => f.name === spot.name);
+            const response = existing
+                ? await fetch(`/api/favorites/${existing.recommendationId}`, { method: 'DELETE' })
+                : await fetch('/api/favorites', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(spot)
+                });
+            const data = await response.json();
+            if (!response.ok) {
+                alert(data.error || '收藏操作失敗');
+                return;
+            }
+            if (existing) {
+                favorites.value = favorites.value.filter(f => f.name !== spot.name);
+            } else {
+                favorites.value.push(data.favorite);
+            }
+        };
+
+        const isFavorite = (spot) => favorites.value.some(f => f.name === spot.name);
+
+        Vue.onMounted(() => {
+            loadSpots();
+            loadFavorites();
+        });
+
+        return {
+            exploreSpots,
+            favorites,
+            toggleFavorite,
+            isFavorite,
+            isLoading,
+            categories,
+            currentCategory,
+            changeCategory,
+            loadSpots
+        };
+        }
         }).mount('#app');
     </script>
 </body>

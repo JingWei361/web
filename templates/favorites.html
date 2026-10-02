@@ -35,16 +35,46 @@
     </header>
     <div id="app">
         <section class="max-w-3xl mx-auto px-4 py-12">
-            <h2 class="text-3xl font-bold mb-8">我的收藏 ({{ favorites|length }})</h2>
+            <h2 class="text-3xl font-bold mb-8">我的收藏 (<span v-text="favorites.length">0</span>)</h2>
             {% raw %}
             <div v-if="favorites.length === 0" class="text-center py-20 bg-white rounded-3xl border-2 border-dashed">
-                <p class="text-slate-400">目前沒有收藏。</p>
+                <p class="text-slate-400">目前沒有收藏。請先登入查看同步收藏。</p>
             </div>
             <div v-else class="space-y-4">
                 <div v-for="spot in favorites" class="bg-white p-4 rounded-2xl flex items-center shadow-sm">
                     <div class="text-3xl mr-6">{{ spot.emoji }}</div>
                     <div class="flex-1 font-bold">{{ spot.name }}</div>
                     <button @click="remove(spot)" class="text-slate-300 hover:text-red-500 px-2 text-xl">🗑️</button>
+                </div>
+            </div>
+
+            <h3 v-if="generationFavorites.length" class="text-2xl font-bold mt-12 mb-4">收藏的 AI 行程</h3>
+            <div v-if="generationFavorites.length" class="space-y-4">
+                <div v-for="item in generationFavorites" :key="item.generation_record_id"
+                    @click="selectGeneration(item)" class="bg-white p-4 rounded-2xl shadow-sm cursor-pointer">
+                    <div class="flex items-center">
+                        <div class="text-3xl mr-6">🗓️</div>
+                        <div class="flex-1">
+                            <p class="font-bold">{{ item.record.title }}</p>
+                            <p class="text-sm text-slate-500">點擊查看完整 AI 行程</p>
+                        </div>
+                        <button @click.stop="removeGeneration(item)"
+                            class="text-slate-300 hover:text-red-500 px-2 text-xl" aria-label="取消行程收藏">🗑️</button>
+                    </div>
+                    <div v-if="selectedGeneration === item" class="border-t border-slate-100 mt-4 pt-4">
+                        <div v-if="getItinerary(item).length" class="space-y-3">
+                            <article v-for="day in getItinerary(item)" :key="day.day"
+                                class="border border-slate-100 rounded-xl p-4">
+                                <div class="flex flex-wrap items-center gap-x-3 gap-y-1 mb-2">
+                                    <p class="font-bold text-blue-600">第 {{ day.day }} 天</p>
+                                    <p class="text-xs text-blue-500">{{ day.date || '日期未設定' }}</p>
+                                </div>
+                                <p class="font-semibold">{{ day.title }}</p>
+                                <p class="text-sm text-slate-500 mt-1">{{ (day.activities || []).join('、') }}</p>
+                            </article>
+                        </div>
+                        <p v-else class="text-sm text-slate-500">這筆行程沒有可顯示的詳細內容。</p>
+                    </div>
                 </div>
             </div>
             {% endraw %}
@@ -54,18 +84,54 @@
     <script>
         Vue.createApp({
             setup() {
-                const favorites = Vue.ref([]);
-                const remove = (spot) => {
-                    favorites.value = favorites.value.filter(f => f.name !== spot.name);
-                    localStorage.setItem('my_travel_favorites', JSON.stringify(favorites.value));
-                    window.dispatchEvent(new Event('fav-updated'));
-                };
-                Vue.onMounted(() => {
-                    const saved = localStorage.getItem('my_travel_favorites');
-                    if (saved) favorites.value = JSON.parse(saved);
-                });
-                return { favorites, remove };
+                const isAuthenticated = {% if user %}true{% else %}false{% endif %};
+        const favorites = Vue.ref([]);
+        const generationFavorites = Vue.ref([]);
+        const selectedGeneration = Vue.ref(null);
+        const getItinerary = (item) => {
+            try {
+                const content = item.record.generated_content;
+                const itinerary = typeof content === 'string' ? JSON.parse(content) : content;
+                return Array.isArray(itinerary) ? itinerary : [];
+            } catch (error) {
+                return [];
             }
+        };
+        const selectGeneration = (item) => {
+            selectedGeneration.value = selectedGeneration.value === item ? null : item;
+        };
+        const remove = async (spot) => {
+            const response = await fetch(`/api/favorites/${spot.recommendationId}`, { method: 'DELETE' });
+            if (response.ok) {
+                favorites.value = favorites.value.filter(f => f.recommendationId !== spot.recommendationId);
+            }
+        };
+        const removeGeneration = async (item) => {
+            const response = await fetch(`/api/generation-favorites/${item.generation_record_id}`, { method: 'DELETE' });
+            if (response.ok) {
+                if (selectedGeneration.value === item) selectedGeneration.value = null;
+                generationFavorites.value = generationFavorites.value.filter(
+                    favorite => favorite.generation_record_id !== item.generation_record_id
+                );
+            }
+        };
+        Vue.onMounted(async () => {
+            if (!isAuthenticated) return;
+            const [favoriteResponse, generationResponse] = await Promise.all([
+                fetch('/api/favorites'),
+                fetch('/api/generation-favorites')
+            ]);
+            if (favoriteResponse.ok) {
+                const data = await favoriteResponse.json();
+                favorites.value = data.favorites || [];
+            }
+            if (generationResponse.ok) {
+                const data = await generationResponse.json();
+                generationFavorites.value = data.favorites || [];
+            }
+        });
+        return { favorites, generationFavorites, selectedGeneration, getItinerary, selectGeneration, remove, removeGeneration };
+        }
         }).mount('#app');
     </script>
 </body>
