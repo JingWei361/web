@@ -1,14 +1,23 @@
 import os
 import json
+import re
 from datetime import datetime, timedelta
 from typing import Any
 
+from dotenv import load_dotenv
 from flask import Flask, flash, jsonify, redirect, render_template, request, session, url_for
+from flask_cors import CORS
+from google import genai
 from supabase import create_client, Client
 
 
+load_dotenv()
+
 app = Flask(__name__, template_folder='templates')
 app.secret_key = 'ai_traveler_secret_key_2026'
+CORS(app, resources={r"/api/*": {"origins": "*"}})
+
+GEMINI_MODEL = "gemini-3.8-flash"
 
 spots = [
     {'name': '雷門', 'emoji': '⛩️', 'tag': '景點', 'category': 'attraction', 'desc': '充滿歷史感的紅色大燈籠。', 'rating': 4.8},
@@ -24,6 +33,40 @@ spots = [
 SUPABASE_URL = "https://keiyqvrdiogknmmghzgq.supabase.co"
 SUPABASE_KEY = "sb_publishable_tTq7TudmepTnN1oqQxEv1g__2pjRfFN"
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+
+
+def get_gemini_client() -> genai.Client | None:
+    api_key = os.getenv("GEMINI_API_KEY")
+    if not api_key:
+        return None
+    return genai.Client(api_key=api_key)
+
+
+def parse_gemini_json(text: str) -> Any:
+    cleaned = text.strip()
+    fenced = re.search(r"```(?:json)?\s*(.*?)\s*```", cleaned, re.DOTALL)
+    if fenced:
+        cleaned = fenced.group(1)
+    return json.loads(cleaned)
+
+
+def generate_gemini_json(prompt: str, contents: Any = None) -> Any:
+    client = get_gemini_client()
+    if client is None:
+        raise RuntimeError("GEMINI_API_KEY is not configured.")
+    response = client.models.generate_content(
+        model=GEMINI_MODEL,
+        contents=contents if contents is not None else prompt,
+        config={
+            "system_instruction": (
+                "你是可靠的旅遊規劃助手。只回傳有效 JSON，不要 Markdown、註解或額外文字。"
+            ),
+            "response_mime_type": "application/json",
+        },
+    )
+    if not response.text:
+        raise ValueError("Gemini returned an empty response.")
+    return parse_gemini_json(response.text)
 
 
 def get_authenticated_client() -> tuple[Any, Any]:
@@ -119,6 +162,33 @@ def recognize():
                            name=current_name,
                            gender=current_gender)
 
+
+@app.route("/api/chat", methods=["POST"])
+def chat():
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return jsonify({"error": "請提供有效的 JSON 資料。"}), 400
+
+    prompt = data.get("prompt")
+    if not isinstance(prompt, str) or not prompt.strip():
+        return jsonify({"error": "prompt 必須是不可為空的文字。"}), 400
+
+    client = get_gemini_client()
+    if client is None:
+        app.logger.error("GEMINI_API_KEY is not configured.")
+        return jsonify({"error": "Gemini API 尚未設定，請確認 GEMINI_API_KEY 環境變數。"}), 503
+
+    try:
+        response = client.models.generate_content(
+            model=GEMINI_MODEL,
+            contents=prompt.strip(),
+        )
+        return jsonify({"response": response.text})
+    except Exception:
+        app.logger.exception("Gemini API request failed.")
+        return jsonify({"error": "Gemini API 呼叫失敗，請稍後再試。"}), 502
+
+
 # ==========================================
 # API：生成行程
 # ==========================================
@@ -127,6 +197,8 @@ def generate_itinerary():
     data = request.get_json(silent=True) or {}
     city = str(data.get('city', '')).strip()
     start_date_text = str(data.get('startDate', '')).strip()
+    style = str(data.get('style', 'balanced')).strip() or 'balanced'
+    budget = data.get('budget')
     try:
         days = max(1, min(30, int(data.get('days', 1))))
     except (TypeError, ValueError):
@@ -138,16 +210,28 @@ def generate_itinerary():
     except ValueError:
         return jsonify({'error': '出發日期格式不正確。'}), 400
 
-    itinerary = [
-        {
-            'day': day,
-            'date': (start_date + timedelta(days=day - 1)).strftime('%Y-%m-%d'),
-            'title': f'{city} 第 {day} 天',
-            'activities': ['探索當地景點', '品嚐在地美食'],
-        }
-        for day in range(1, days + 1)
-    ]
-    return jsonify({'itinerary': itinerary})
+    prompt = f"""
+請為 {city} 安排 {days} 天的旅遊行程。
+出發日期：{start_date.strftime('%Y-%m-%d')}
+旅遊風格：{style}
+預算：{budget or '未提供'}
+請考量每日景點距離、交通時間、用餐與行程節奏。
+回傳 JSON，格式必須是：
+{{"itinerary":[{{"day":1,"date":"YYYY-MM-DD","title":"行程標題","activities":["活動1","活動2","活動3"]}}]}}
+每天一個物件，day 從 1 到 {days}，date 必須依序正確。
+"""
+    try:
+        result = generate_gemini_json(prompt)
+        itinerary = result.get('itinerary') if isinstance(result, dict) else None
+        if not isinstance(itinerary, list) or len(itinerary) != days:
+            raise ValueError("Gemini returned an invalid itinerary shape.")
+        return jsonify({'itinerary': itinerary, 'source': 'gemini'})
+    except RuntimeError:
+        app.logger.error("GEMINI_API_KEY is not configured.")
+        return jsonify({'error': 'Gemini API 尚未設定，請確認 GEMINI_API_KEY 環境變數。'}), 503
+    except Exception:
+        app.logger.exception("Gemini itinerary generation failed.")
+        return jsonify({'error': 'AI 行程規劃失敗，請稍後再試。'}), 502
 
 # ==========================================
 # API：獲取探索景點
@@ -155,8 +239,29 @@ def generate_itinerary():
 @app.route("/api/explore_spots")
 def get_explore_spots():
     category = request.args.get('category', 'all')
-    filtered = spots if category == 'all' else [spot for spot in spots if spot['category'] == category]
-    return jsonify({'spots': filtered})
+    category_name = {'all': '景點與美食', 'attraction': '景點', 'food': '美食'}.get(category)
+    if category_name is None:
+        return jsonify({'error': '無效的景點分類。'}), 400
+
+    try:
+        result = generate_gemini_json(
+            f"""
+請隨機推薦 6 個適合旅客探索的{category_name}。
+每個推薦需包含真實且適合旅遊的名稱、emoji、tag、category、簡短 desc 與 1 到 5 的 rating。
+category 只能是 attraction 或 food。
+回傳 JSON：{{"spots":[{{"name":"名稱","emoji":"圖示","tag":"景點或美食","category":"attraction","desc":"介紹","rating":4.5}}]}}
+"""
+        )
+        generated_spots = result.get('spots') if isinstance(result, dict) else None
+        if not isinstance(generated_spots, list) or not generated_spots:
+            raise ValueError("Gemini returned an invalid spots shape.")
+        return jsonify({'spots': generated_spots, 'source': 'gemini'})
+    except RuntimeError:
+        filtered = spots if category == 'all' else [spot for spot in spots if spot['category'] == category]
+        return jsonify({'spots': filtered, 'source': 'fallback'})
+    except Exception:
+        app.logger.exception("Gemini spot recommendation failed.")
+        return jsonify({'error': 'AI 景點推薦失敗，請稍後再試。'}), 502
 
 
 @app.get('/api/favorites')
@@ -418,14 +523,37 @@ def replan():
 def recognize_image():
     if 'image' not in request.files or not request.files['image'].filename:
         return jsonify({'error': '請選擇圖片。'}), 400
-    return jsonify({
-        'landmarkName': '東京街景',
-        'description': '這是本地示範辨識結果。接入影像模型後即可替換成實際分析內容。',
-        'similarSpots': [
-            {'name': '雷門', 'emoji': '⛩️', 'reason': '同樣具有東京代表性的街景特色。'},
-            {'name': '明治神宮', 'emoji': '⛩️', 'reason': '適合延伸探索東京文化景點。'},
-        ],
-    })
+    image = request.files['image']
+    image_bytes = image.read()
+    if not image_bytes:
+        return jsonify({'error': '圖片內容不可為空。'}), 400
+    if not image.mimetype or not image.mimetype.startswith('image/'):
+        return jsonify({'error': '只支援圖片檔案。'}), 400
+
+    prompt = """
+請辨識這張旅遊圖片中的地標、景點或場景。
+若無法確定，請誠實說明不確定，不要捏造精確地點。
+請推薦 2 個相似或適合延伸探索的景點。
+回傳 JSON：{"landmarkName":"辨識名稱或未知","description":"辨識說明","similarSpots":[{"name":"景點名稱","emoji":"圖示","reason":"推薦原因"}]}
+"""
+    try:
+        result = generate_gemini_json(
+            prompt,
+            contents=[
+                prompt,
+                genai.types.Part.from_bytes(data=image_bytes, mime_type=image.mimetype),
+            ],
+        )
+        if not isinstance(result, dict):
+            raise ValueError("Gemini returned an invalid image result.")
+        result.setdefault('similarSpots', [])
+        return jsonify({**result, 'source': 'gemini'})
+    except RuntimeError:
+        app.logger.error("GEMINI_API_KEY is not configured.")
+        return jsonify({'error': 'Gemini API 尚未設定，請確認 GEMINI_API_KEY 環境變數。'}), 503
+    except Exception:
+        app.logger.exception("Gemini image recognition failed.")
+        return jsonify({'error': 'AI 圖片辨識失敗，請稍後再試。'}), 502
 
 # ==========================================
 # 註冊功能 (Register) - 支援 Profile 資料
