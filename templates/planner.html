@@ -137,7 +137,8 @@
                             <div v-if="editingIndex !== index" class="flex-1">
                                 <p class="font-semibold">{{ day.title }}</p>
                                 <p class="text-xs text-blue-500 mb-1">{{ day.date || '日期未設定' }}</p>
-                                <p class="text-sm text-slate-500">{{ day.activities.join('、') }}</p>
+                                <p v-if="day.description" class="text-sm text-slate-600 mt-2">{{ day.description }}</p>
+                                <p class="text-sm text-slate-500 mt-1">{{ (day.activities || []).join('、') }}</p>
                             </div>
                             <div v-else class="flex-1 space-y-2">
                                 <input v-model="editDraft.title" type="text"
@@ -336,6 +337,8 @@
                 const data = await response.json();
                 return data.record;
             }
+            const data = await response.json().catch(() => ({}));
+            alert(data.error || '行程紀錄儲存失敗，請稍後再試');
             {% endif %}
             return null;
         };
@@ -349,7 +352,10 @@
                 const record = await saveGenerationRecord();
                 generationRecordId.value = record ? record.id : null;
             }
-            if (!generationRecordId.value) return;
+            if (!generationRecordId.value) {
+                alert('目前沒有可收藏的行程，請重新生成後再試');
+                return;
+            }
 
             const response = isItineraryFavorite.value
                 ? await fetch(`/api/generation-favorites/${generationRecordId.value}`, { method: 'DELETE' })
@@ -358,7 +364,12 @@
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ generationRecordId: generationRecordId.value })
                 });
-            if (response.ok) isItineraryFavorite.value = !isItineraryFavorite.value;
+            const data = await response.json().catch(() => ({}));
+            if (response.ok) {
+                isItineraryFavorite.value = !isItineraryFavorite.value;
+            } else {
+                alert(data.error || '收藏操作失敗，請稍後再試');
+            }
         };
 
         const replanItinerary = async () => {
@@ -400,7 +411,7 @@
         const startEdit = (day, index) => {
             editingIndex.value = index;
             editDraft.title = day.title;
-            editDraft.activitiesText = day.activities.join(', ');
+            editDraft.activitiesText = (day.activities || []).join(', ');
         };
 
         const saveEdit = (index) => {

@@ -41,27 +41,56 @@
                 <p class="text-slate-400">目前沒有收藏。請先登入查看同步收藏。</p>
             </div>
             <div v-else class="space-y-4">
-                <div v-for="spot in favorites" class="bg-white p-4 rounded-2xl flex items-center shadow-sm">
-                    <div class="text-3xl mr-6">{{ spot.emoji }}</div>
-                    <div class="flex-1 font-bold">{{ spot.name }}</div>
-                    <button @click="remove(spot)" class="text-slate-300 hover:text-red-500 px-2 text-xl">🗑️</button>
+                <div v-for="spot in favorites" :key="spot.recommendationId"
+                    class="bg-white p-4 rounded-2xl shadow-sm">
+                    <div class="flex items-center">
+                        <div class="text-3xl mr-6">{{ spot.emoji || '📍' }}</div>
+                        <div class="flex-1">
+                            <p class="font-bold">{{ spot.name }}</p>
+                            <p v-if="spot.tag" class="text-xs text-blue-500 mt-1">{{ spot.tag }}</p>
+                        </div>
+                        <button @click="selectSpot(spot)" type="button"
+                            class="text-sm font-bold text-blue-600 hover:text-blue-800 px-3"
+                            :aria-expanded="selectedSpot === spot">
+                            {{ selectedSpot === spot ? '收合' : '查看介紹' }}
+                        </button>
+                        <button @click="remove(spot)" class="text-slate-300 hover:text-red-500 px-2 text-xl"
+                            aria-label="取消景點收藏">🗑️</button>
+                    </div>
+                    <div v-if="selectedSpot === spot" class="border-t border-slate-100 mt-4 pt-4">
+                        <p v-if="spot.desc" class="text-sm text-slate-600 leading-relaxed">{{ spot.desc }}</p>
+                        <p v-else class="text-sm text-slate-500">這筆收藏沒有可顯示的介紹。</p>
+                        <p v-if="spot.rating" class="text-xs text-amber-500 font-bold mt-3">⭐ {{ spot.rating }}</p>
+                    </div>
                 </div>
             </div>
 
             <h3 v-if="generationFavorites.length" class="text-2xl font-bold mt-12 mb-4">收藏的 AI 行程</h3>
             <div v-if="generationFavorites.length" class="space-y-4">
                 <div v-for="item in generationFavorites" :key="item.generation_record_id"
-                    @click="selectGeneration(item)" class="bg-white p-4 rounded-2xl shadow-sm cursor-pointer">
+                    class="bg-white p-4 rounded-2xl shadow-sm">
                     <div class="flex items-center">
                         <div class="text-3xl mr-6">🗓️</div>
                         <div class="flex-1">
                             <p class="font-bold">{{ item.record.title }}</p>
-                            <p class="text-sm text-slate-500">點擊查看完整 AI 行程</p>
+                            <p class="text-sm text-slate-500">
+                                {{ item.record.context_data?.city || 'AI' }} ·
+                                {{ getItinerary(item).length }} 天行程
+                            </p>
                         </div>
+                        <button @click="selectGeneration(item)" type="button"
+                            class="text-sm font-bold text-blue-600 hover:text-blue-800 px-3"
+                            :aria-expanded="selectedGeneration === item">
+                            {{ selectedGeneration === item ? '收合' : '展開詳情' }}
+                        </button>
                         <button @click.stop="removeGeneration(item)"
                             class="text-slate-300 hover:text-red-500 px-2 text-xl" aria-label="取消行程收藏">🗑️</button>
                     </div>
                     <div v-if="selectedGeneration === item" class="border-t border-slate-100 mt-4 pt-4">
+                        <div v-if="item.record.prompt" class="mb-4 rounded-xl bg-blue-50 p-4">
+                            <p class="text-xs font-bold text-blue-600 mb-1">行程需求</p>
+                            <p class="text-sm text-slate-600">{{ item.record.prompt }}</p>
+                        </div>
                         <div v-if="getItinerary(item).length" class="space-y-3">
                             <article v-for="day in getItinerary(item)" :key="day.day"
                                 class="border border-slate-100 rounded-xl p-4">
@@ -70,7 +99,14 @@
                                     <p class="text-xs text-blue-500">{{ day.date || '日期未設定' }}</p>
                                 </div>
                                 <p class="font-semibold">{{ day.title }}</p>
-                                <p class="text-sm text-slate-500 mt-1">{{ (day.activities || []).join('、') }}</p>
+                                <p v-if="day.description || day.introduction"
+                                    class="text-sm text-slate-600 leading-relaxed mt-2">
+                                    {{ day.description || day.introduction }}
+                                </p>
+                                <p v-if="(day.activities || []).length" class="text-sm text-slate-500 mt-2">
+                                    <span class="font-semibold text-slate-600">行程：</span>
+                                    {{ day.activities.join('、') }}
+                                </p>
                             </article>
                         </div>
                         <p v-else class="text-sm text-slate-500">這筆行程沒有可顯示的詳細內容。</p>
@@ -87,12 +123,14 @@
                 const isAuthenticated = {% if user %}true{% else %}false{% endif %};
         const favorites = Vue.ref([]);
         const generationFavorites = Vue.ref([]);
+        const selectedSpot = Vue.ref(null);
         const selectedGeneration = Vue.ref(null);
         const getItinerary = (item) => {
             try {
                 const content = item.record.generated_content;
                 const itinerary = typeof content === 'string' ? JSON.parse(content) : content;
-                return Array.isArray(itinerary) ? itinerary : [];
+                if (Array.isArray(itinerary)) return itinerary;
+                return Array.isArray(itinerary?.itinerary) ? itinerary.itinerary : [];
             } catch (error) {
                 return [];
             }
@@ -103,8 +141,12 @@
         const remove = async (spot) => {
             const response = await fetch(`/api/favorites/${spot.recommendationId}`, { method: 'DELETE' });
             if (response.ok) {
+                if (selectedSpot.value === spot) selectedSpot.value = null;
                 favorites.value = favorites.value.filter(f => f.recommendationId !== spot.recommendationId);
             }
+        };
+        const selectSpot = (spot) => {
+            selectedSpot.value = selectedSpot.value === spot ? null : spot;
         };
         const removeGeneration = async (item) => {
             const response = await fetch(`/api/generation-favorites/${item.generation_record_id}`, { method: 'DELETE' });
@@ -130,7 +172,7 @@
                 generationFavorites.value = data.favorites || [];
             }
         });
-        return { favorites, generationFavorites, selectedGeneration, getItinerary, selectGeneration, remove, removeGeneration };
+        return { favorites, generationFavorites, selectedSpot, selectedGeneration, getItinerary, selectSpot, selectGeneration, remove, removeGeneration };
         }
         }).mount('#app');
     </script>

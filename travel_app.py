@@ -217,8 +217,9 @@ def generate_itinerary():
 預算：{budget or '未提供'}
 請考量每日景點距離、交通時間、用餐與行程節奏。
 回傳 JSON，格式必須是：
-{{"itinerary":[{{"day":1,"date":"YYYY-MM-DD","title":"行程標題","activities":["活動1","活動2","活動3"]}}]}}
+{{"itinerary":[{{"day":1,"date":"YYYY-MM-DD","title":"行程標題","description":"完整介紹與旅遊建議","activities":["活動1","活動2","活動3"]}}]}}
 每天一個物件，day 從 1 到 {days}，date 必須依序正確。
+每一天另外提供 description，完整說明當天行程特色、安排理由與旅遊建議。
 """
     try:
         result = generate_gemini_json(prompt)
@@ -311,7 +312,7 @@ def create_favorite():
             'user_id': user_id,
             'recommendation_text': str(data.get('desc') or name),
             'recommendation_data': data,
-            'source': 'explore',
+            'source': str(data.get('source') or 'explore'),
         }).execute().data[0]
         favorite = user_client.table('ai_recommendation_favorites').insert({
             'user_id': user_id,
@@ -406,6 +407,18 @@ def create_generation_favorite():
     if not generation_record_id:
         return jsonify({'error': '缺少生成紀錄 ID。'}), 400
     try:
+        record_rows = user_client.table('ai_generation_records').select('id').eq(
+            'id', generation_record_id
+        ).eq('user_id', user_id).limit(1).execute().data or []
+        if not record_rows:
+            return jsonify({'error': '找不到可收藏的行程紀錄。'}), 404
+
+        existing_rows = user_client.table('ai_generation_favorites').select('*').eq(
+            'user_id', user_id
+        ).eq('generation_record_id', generation_record_id).limit(1).execute().data or []
+        if existing_rows:
+            return jsonify({'favorite': existing_rows[0]}), 200
+
         favorite = user_client.table('ai_generation_favorites').insert({
             'user_id': user_id,
             'generation_record_id': generation_record_id,
