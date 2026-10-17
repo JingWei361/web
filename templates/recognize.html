@@ -76,6 +76,8 @@
                         <div class="bg-green-100 text-green-600 px-3 py-1 rounded-full text-sm font-bold mr-3">辨識成功
                         </div>
                         <h3 class="text-xl font-bold flex-1">辨識結果：{{ result.landmarkName }}</h3>
+                        <a v-if="result.mapsUrl" :href="result.mapsUrl" target="_blank" rel="noopener"
+                            class="text-sm font-bold text-blue-600 hover:text-blue-800">🗺️ 導航到辨識地點</a>
                         <button v-if="result.landmarkName && result.landmarkName !== '未知'"
                             @click="toggleFavorite(recognizedSpot)" type="button"
                             class="text-red-400 text-xl hover:scale-110 transition"
@@ -95,6 +97,8 @@
                                 <p class="font-bold">{{ spot.name }}</p>
                                 <p class="text-xs text-slate-400">{{ spot.reason }}</p>
                             </div>
+                            <a v-if="spot.mapsUrl" :href="spot.mapsUrl" target="_blank" rel="noopener"
+                                class="mr-3 text-xs font-bold text-blue-600 hover:text-blue-800">🗺️ 導航</a>
                             <button @click="toggleFavorite(spot)" type="button"
                                 class="text-red-400 text-xl hover:scale-110 transition"
                                 :aria-label="isFavorite(spot) ? '取消收藏' : '收藏景點'">

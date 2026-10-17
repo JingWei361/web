@@ -74,7 +74,11 @@
                         <div class="flex items-center justify-between">
                             <span class="bg-blue-50 px-2 py-1 rounded text-xs text-blue-500 font-bold"># {{ spot.tag
                                 }}</span>
-                            <span v-if="spot.rating" class="text-xs text-amber-500 font-bold">⭐ {{ spot.rating }}</span>
+                            <div class="flex items-center gap-3">
+                                <a :href="spot.mapsUrl || mapsUrl(spot.name)" target="_blank" rel="noopener"
+                                    class="text-xs font-bold text-blue-600 hover:text-blue-800">🗺️ 導航</a>
+                                <span v-if="spot.rating" class="text-xs text-amber-500 font-bold">⭐ {{ spot.rating }}</span>
+                            </div>
                         </div>
                     </div>
                 </div>
@@ -177,6 +181,7 @@
         };
 
         const isFavorite = (spot) => favorites.value.some(f => f.name === spot.name);
+        const mapsUrl = (place) => `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(place)}`;
 
         Vue.onMounted(() => {
             loadSpots();
@@ -192,7 +197,8 @@
             categories,
             currentCategory,
             changeCategory,
-            loadSpots
+            loadSpots,
+            mapsUrl
         };
         }
         }).mount('#app');

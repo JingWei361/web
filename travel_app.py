@@ -3,11 +3,13 @@ import json
 import re
 from datetime import datetime, timedelta
 from typing import Any
+from urllib.parse import quote
 
 from dotenv import load_dotenv
 from flask import Flask, flash, jsonify, redirect, render_template, request, session, url_for
 from flask_cors import CORS
 from google import genai
+from google.genai import types
 from supabase import create_client, Client
 
 
@@ -17,7 +19,8 @@ app = Flask(__name__, template_folder='templates')
 app.secret_key = 'ai_traveler_secret_key_2026'
 CORS(app, resources={r"/api/*": {"origins": "*"}})
 
-GEMINI_MODEL = "gemini-3.8-flash"
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.0-flash-lite")
+GEMINI_TIMEOUT_MS = int(os.getenv("GEMINI_TIMEOUT_MS", "60000"))
 
 spots = [
     {'name': '雷門', 'emoji': '⛩️', 'tag': '景點', 'category': 'attraction', 'desc': '充滿歷史感的紅色大燈籠。', 'rating': 4.8},
@@ -39,7 +42,10 @@ def get_gemini_client() -> genai.Client | None:
     api_key = os.getenv("GEMINI_API_KEY")
     if not api_key:
         return None
-    return genai.Client(api_key=api_key)
+    return genai.Client(
+        api_key=api_key,
+        http_options=types.HttpOptions(timeout=GEMINI_TIMEOUT_MS),
+    )
 
 
 def parse_gemini_json(text: str) -> Any:
@@ -59,14 +65,103 @@ def generate_gemini_json(prompt: str, contents: Any = None) -> Any:
         contents=contents if contents is not None else prompt,
         config={
             "system_instruction": (
-                "你是可靠的旅遊規劃助手。只回傳有效 JSON，不要 Markdown、註解或額外文字。"
+                "你是旅遊規劃助手。只回傳有效 JSON，不要 Markdown 或額外文字。"
             ),
             "response_mime_type": "application/json",
+            "temperature": 0.2,
+            "max_output_tokens": 2048,
         },
     )
     if not response.text:
         raise ValueError("Gemini returned an empty response.")
     return parse_gemini_json(response.text)
+
+
+def google_maps_search_url(place: str, city: str = '') -> str:
+    query = ', '.join(part for part in (place, city) if part)
+    return f"https://www.google.com/maps/search/?api=1&query={quote(query)}"
+
+
+def google_maps_directions_url(places: list[str], city: str = '') -> str | None:
+    destinations = [', '.join(part for part in (place, city) if part) for place in places if place]
+    if not destinations:
+        return None
+    params = [
+        'api=1',
+        f'origin={quote(destinations[0])}',
+        f'destination={quote(destinations[-1])}',
+        'travelmode=transit',
+    ]
+    if len(destinations) > 2:
+        params.append(f"waypoints={quote('|'.join(destinations[1:-1]))}")
+    return f"https://www.google.com/maps/dir/?{'&'.join(params)}"
+
+
+def normalize_activity(
+    activity: Any,
+    city: str,
+    index: int,
+    include_maps: bool = True,
+) -> dict[str, str]:
+    if isinstance(activity, dict):
+        name = str(activity.get('name') or activity.get('place') or activity.get('location') or '').strip()
+        place = str(activity.get('place') or activity.get('name') or name).strip()
+        category = str(activity.get('category') or '活動').strip()
+        normalized = {
+            'time': str(activity.get('time') or f'時段 {index}').strip(),
+            'name': name or place or '未命名行程',
+            'place': place or name or '未指定地點',
+            'address': str(activity.get('address') or '').strip(),
+            'category': category,
+            'description': str(activity.get('description') or '').strip(),
+        }
+    else:
+        place = str(activity or '').strip()
+        normalized = {
+            'time': f'時段 {index}',
+            'name': place or '未命名行程',
+            'place': place or '未指定地點',
+            'address': '',
+            'category': '活動',
+            'description': '',
+        }
+    if include_maps:
+        normalized['mapsUrl'] = google_maps_search_url(
+            normalized['address'] or normalized['place'], city
+        )
+    return normalized
+
+
+def normalize_day(
+    day_plan: Any,
+    city: str,
+    day_number: int,
+    date_text: str,
+    include_maps: bool = True,
+) -> dict[str, Any]:
+    source = day_plan if isinstance(day_plan, dict) else {}
+    activities = source.get('activities') or []
+    if not isinstance(activities, list):
+        activities = [activities]
+    normalized_activities = [
+        normalize_activity(activity, city, index, include_maps=include_maps)
+        for index, activity in enumerate(activities, start=1)
+    ]
+    places = [
+        activity['address'] or activity['place']
+        for activity in normalized_activities
+        if activity['place'] != '未指定地點'
+    ]
+    normalized_day = {
+        'day': day_number,
+        'date': str(source.get('date') or date_text),
+        'title': str(source.get('title') or f'{city} 第 {day_number} 天'),
+        'description': str(source.get('description') or '').strip(),
+        'activities': normalized_activities,
+    }
+    if include_maps:
+        normalized_day['mapsUrl'] = google_maps_directions_url(places, city)
+    return normalized_day
 
 
 def get_authenticated_client() -> tuple[Any, Any]:
@@ -200,7 +295,7 @@ def generate_itinerary():
     style = str(data.get('style', 'balanced')).strip() or 'balanced'
     budget = data.get('budget')
     try:
-        days = max(1, min(30, int(data.get('days', 1))))
+        days = max(1, min(14, int(data.get('days', 1))))
     except (TypeError, ValueError):
         return jsonify({'error': '旅行天數格式不正確。'}), 400
     if not city:
@@ -211,22 +306,30 @@ def generate_itinerary():
         return jsonify({'error': '出發日期格式不正確。'}), 400
 
     prompt = f"""
-請為 {city} 安排 {days} 天的旅遊行程。
-出發日期：{start_date.strftime('%Y-%m-%d')}
-旅遊風格：{style}
-預算：{budget or '未提供'}
-請考量每日景點距離、交通時間、用餐與行程節奏。
-回傳 JSON，格式必須是：
-{{"itinerary":[{{"day":1,"date":"YYYY-MM-DD","title":"行程標題","description":"完整介紹與旅遊建議","activities":["活動1","活動2","活動3"]}}]}}
-每天一個物件，day 從 1 到 {days}，date 必須依序正確。
-每一天另外提供 description，完整說明當天行程特色、安排理由與旅遊建議。
+規劃{city} {days}天旅行，日期從{start_date.strftime('%Y-%m-%d')}開始，風格：{style}。
+只回傳 JSON，不要解釋。每天只安排 2 個活動，按照時間排序。
+格式：{{"itinerary":[{{"day":1,"date":"YYYY-MM-DD","title":"短標題","description":"30字內摘要",
+"activities":[{{"time":"09:00","name":"明確景點或店名","place":"明確地點名稱","address":"簡短地址",
+"category":"景點","description":"20字內說明"}}]}}]}}
+day 必須是 1 到 {days}，日期依序增加。category 只能是：食物、活動、購物、景點、酒店、交通、其他。
+必須使用真實、明確的地點或店名，不要使用「探索市區」等泛稱。
 """
     try:
         result = generate_gemini_json(prompt)
         itinerary = result.get('itinerary') if isinstance(result, dict) else None
         if not isinstance(itinerary, list) or len(itinerary) != days:
             raise ValueError("Gemini returned an invalid itinerary shape.")
-        return jsonify({'itinerary': itinerary, 'source': 'gemini'})
+        normalized_itinerary = [
+            normalize_day(
+                day_plan,
+                city,
+                day_number,
+                (start_date + timedelta(days=day_number - 1)).strftime('%Y-%m-%d'),
+                include_maps=False,
+            )
+            for day_number, day_plan in enumerate(itinerary, start=1)
+        ]
+        return jsonify({'itinerary': normalized_itinerary, 'source': 'gemini'})
     except RuntimeError:
         app.logger.error("GEMINI_API_KEY is not configured.")
         return jsonify({'error': 'Gemini API 尚未設定，請確認 GEMINI_API_KEY 環境變數。'}), 503
@@ -256,10 +359,15 @@ category 只能是 attraction 或 food。
         generated_spots = result.get('spots') if isinstance(result, dict) else None
         if not isinstance(generated_spots, list) or not generated_spots:
             raise ValueError("Gemini returned an invalid spots shape.")
+        for spot in generated_spots:
+            spot['mapsUrl'] = google_maps_search_url(str(spot.get('name', '')).strip())
         return jsonify({'spots': generated_spots, 'source': 'gemini'})
     except RuntimeError:
         filtered = spots if category == 'all' else [spot for spot in spots if spot['category'] == category]
-        return jsonify({'spots': filtered, 'source': 'fallback'})
+        return jsonify({
+            'spots': [{**spot, 'mapsUrl': google_maps_search_url(spot['name'])} for spot in filtered],
+            'source': 'fallback',
+        })
     except Exception:
         app.logger.exception("Gemini spot recommendation failed.")
         return jsonify({'error': 'AI 景點推薦失敗，請稍後再試。'}), 502
@@ -526,9 +634,40 @@ def replan():
     target_plan = next((day_plan for day_plan in updated_itinerary if day_plan.get('day') == target_day), None)
     if target_plan is None:
         return jsonify({'error': '找不到指定的行程日期。'}), 400
-    fallback_activity = '室內景點與在地美食' if reason == '下雨' else '彈性景點與在地美食'
-    target_plan['title'] = f'{city} 第 {target_day} 天（已依{reason}調整）'
-    target_plan['activities'] = [fallback_activity, '保留交通緩衝時間']
+    date_text = str(target_plan.get('date') or datetime.now().strftime('%Y-%m-%d'))
+    try:
+        result = generate_gemini_json(f"""
+請重新安排 {city} 第 {target_day} 天的旅程，原因是「{reason}」。
+原本行程：{json.dumps(target_plan, ensure_ascii=False)}
+只替換這一天，請提供 2 至 4 個按照時間排序的明確地點或店名。
+回傳 JSON：{{"day":{target_day},"date":"{date_text}","title":"標題","description":"調整原因與建議",
+"activities":[{{"time":"09:00-11:00","name":"明確地點或店名","place":"可搜尋地點","address":"完整地址","category":"景點","description":"說明"}}]}}
+category 只能使用：食物、活動、購物、景點、酒店、交通、其他。
+""")
+        replanned = normalize_day(result, city, target_day, date_text, include_maps=False)
+    except RuntimeError:
+        app.logger.error("GEMINI_API_KEY is not configured for replanning.")
+        fallback_activity = '室內景點' if reason == '下雨' else '彈性景點'
+        replanned = normalize_day({
+            'title': f'{city} 第 {target_day} 天（已依{reason}調整）',
+            'description': f'因{reason}改安排室內或彈性景點。',
+            'activities': [
+                {'time': '10:00-12:00', 'name': f'{city} 車站周邊', 'place': f'{city} 車站周邊',
+                 'category': '交通', 'description': '保留交通彈性。'},
+                {'time': '12:30-14:00', 'name': fallback_activity, 'place': fallback_activity,
+                 'category': '活動', 'description': '依突發狀況調整。'},
+            ],
+        }, city, target_day, date_text, include_maps=False)
+    except Exception:
+        app.logger.exception("Gemini itinerary replanning failed.")
+        return jsonify({'error': 'AI 重新安排失敗，請稍後再試。'}), 502
+    updated_itinerary = [
+        replanned if day_plan.get('day') == target_day else normalize_day(
+            day_plan, city, int(day_plan.get('day', index + 1)), str(day_plan.get('date') or ''),
+            include_maps=False
+        )
+        for index, day_plan in enumerate(updated_itinerary)
+    ]
     return jsonify({'itinerary': updated_itinerary, 'message': f'已只調整第 {target_day} 天，其餘行程保持不變。'})
 
 
@@ -546,8 +685,8 @@ def recognize_image():
     prompt = """
 請辨識這張旅遊圖片中的地標、景點或場景。
 若無法確定，請誠實說明不確定，不要捏造精確地點。
-請推薦 2 個相似或適合延伸探索的景點。
-回傳 JSON：{"landmarkName":"辨識名稱或未知","description":"辨識說明","similarSpots":[{"name":"景點名稱","emoji":"圖示","reason":"推薦原因"}]}
+請推薦 2 個相似或適合延伸探索的景點，每個都要提供可在 Google Maps 搜尋的地點名稱。
+回傳 JSON：{"landmarkName":"辨識名稱或未知","description":"辨識說明","similarSpots":[{"name":"景點名稱","emoji":"圖示","reason":"推薦原因","address":"完整地址"}]}
 """
     try:
         result = generate_gemini_json(
@@ -560,6 +699,14 @@ def recognize_image():
         if not isinstance(result, dict):
             raise ValueError("Gemini returned an invalid image result.")
         result.setdefault('similarSpots', [])
+        landmark_name = str(result.get('landmarkName') or '').strip()
+        if landmark_name and landmark_name != '未知':
+            result['mapsUrl'] = google_maps_search_url(landmark_name)
+        for spot in result['similarSpots']:
+            if isinstance(spot, dict):
+                spot['mapsUrl'] = google_maps_search_url(
+                    str(spot.get('address') or spot.get('name') or '').strip()
+                )
         return jsonify({**result, 'source': 'gemini'})
     except RuntimeError:
         app.logger.error("GEMINI_API_KEY is not configured.")
