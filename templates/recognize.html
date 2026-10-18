@@ -4,7 +4,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>AI Travaler - 圖片辨識景點</title>
+    <title>AI 旅遊助手 - 圖片辨識景點</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
     <link rel="stylesheet" href="{{ url_for('static', filename='responsive.css') }}">
@@ -13,7 +13,7 @@
 <body class="bg-slate-50 text-slate-800">
     <header class="site-header">
         <nav class="site-nav">
-            <a href="/" class="site-brand text-2xl font-bold text-blue-600">AI Travaler</a>
+            <a href="/" class="site-brand text-2xl font-bold text-blue-600">AI 旅遊助手</a>
             <label class="nav-toggle-label" for="nav-toggle" aria-label="開啟導覽選單">☰</label>
             <input class="nav-toggle" id="nav-toggle" type="checkbox">
             <div class="nav-links font-medium">
@@ -116,6 +116,8 @@
         Vue.createApp({
             setup() {
                 const isAuthenticated = {% if user %}true{% else %}false{% endif %};
+        const storageScope = {{ (user or 'guest') | tojson }};
+        const recognizeStorageKey = `my_travel_recognize_${storageScope}`;
         const selectedFile = Vue.ref(null);
         const imagePreview = Vue.ref(null);
         const isAnalyzing = Vue.ref(false);
@@ -136,6 +138,18 @@
             // 產生預覽圖
             imagePreview.value = URL.createObjectURL(file);
             result.value = null; // 重置結果
+            localStorage.removeItem(recognizeStorageKey);
+            const reader = new FileReader();
+            reader.onload = () => {
+                try {
+                    localStorage.setItem(recognizeStorageKey, JSON.stringify({
+                        imagePreview: reader.result
+                    }));
+                } catch (error) {
+                    console.warn('保存圖片預覽失敗:', error);
+                }
+            };
+            reader.readAsDataURL(file);
         };
 
         const uploadImage = async () => {
@@ -153,6 +167,13 @@
                 const data = await response.json();
                 if (response.ok) {
                     result.value = data;
+                    try {
+                        const savedState = JSON.parse(localStorage.getItem(recognizeStorageKey) || '{}');
+                        savedState.result = data;
+                        localStorage.setItem(recognizeStorageKey, JSON.stringify(savedState));
+                    } catch (error) {
+                        console.warn('保存圖片辨識結果失敗:', error);
+                    }
                 } else {
                     alert('辨識失敗');
                 }
@@ -203,7 +224,20 @@
 
         const isFavorite = (spot) => favorites.value.some(favorite => favorite.name === spot.name);
 
-        Vue.onMounted(loadFavorites);
+        Vue.onMounted(() => {
+            try {
+                const savedState = JSON.parse(localStorage.getItem(recognizeStorageKey) || '{}');
+                if (savedState.result && typeof savedState.result === 'object') {
+                    result.value = savedState.result;
+                }
+                if (typeof savedState.imagePreview === 'string' && savedState.imagePreview) {
+                    imagePreview.value = savedState.imagePreview;
+                }
+            } catch (error) {
+                localStorage.removeItem(recognizeStorageKey);
+            }
+            loadFavorites();
+        });
 
         return { selectedFile, imagePreview, isAnalyzing, result, recognizedSpot, onFileChange, uploadImage, toggleFavorite, isFavorite };
             }

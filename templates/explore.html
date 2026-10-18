@@ -4,7 +4,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>AI Travaler - 探索景點</title>
+    <title>AI 旅遊助手 - 探索景點</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
     <link rel="stylesheet" href="{{ url_for('static', filename='responsive.css') }}">
@@ -13,7 +13,7 @@
 <body class="bg-slate-50 text-slate-800">
     <header class="site-header">
         <nav class="site-nav">
-            <a href="/" class="site-brand text-2xl font-bold text-blue-600">AI Travaler</a>
+            <a href="/" class="site-brand text-2xl font-bold text-blue-600">AI 旅遊助手</a>
             <label class="nav-toggle-label" for="nav-toggle" aria-label="開啟導覽選單">☰</label>
             <input class="nav-toggle" id="nav-toggle" type="checkbox">
             <div class="nav-links font-medium">
@@ -87,7 +87,7 @@
 
             <!-- 重新推薦按鈕 -->
             <div class="mt-12 text-center">
-                <button @click="loadSpots" :disabled="isLoading"
+                <button @click="loadSpots(true)" :disabled="isLoading"
                     class="px-8 py-3 bg-slate-900 text-white rounded-2xl font-bold hover:bg-slate-800 transition shadow-lg active:scale-95 disabled:opacity-50">
                     換一批推薦
                 </button>
@@ -103,6 +103,8 @@
         Vue.createApp({
             setup() {
                 const isAuthenticated = {% if user %}true{% else %}false{% endif %};
+        const storageScope = {{ (user or 'guest') | tojson }};
+        const exploreStorageKey = `my_travel_explore_${storageScope}`;
         const favorites = Vue.ref([]);
         const exploreSpots = Vue.ref([]);
         const isLoading = Vue.ref(false);
@@ -124,7 +126,31 @@
             }
         };
 
-        const loadSpots = async () => {
+        const saveExploreState = () => {
+            try {
+                const savedState = JSON.parse(localStorage.getItem(exploreStorageKey) || '{}');
+                savedState.currentCategory = currentCategory.value;
+                savedState.spotsByCategory = savedState.spotsByCategory || {};
+                savedState.spotsByCategory[currentCategory.value] = exploreSpots.value;
+                localStorage.setItem(exploreStorageKey, JSON.stringify(savedState));
+            } catch (error) {
+                console.warn('保存探索景點紀錄失敗:', error);
+            }
+        };
+
+        const loadSpots = async (force = false) => {
+            if (!force) {
+                try {
+                    const savedState = JSON.parse(localStorage.getItem(exploreStorageKey) || '{}');
+                    const savedSpots = savedState.spotsByCategory?.[currentCategory.value];
+                    if (Array.isArray(savedSpots) && savedSpots.length) {
+                        exploreSpots.value = savedSpots;
+                        return;
+                    }
+                } catch (error) {
+                    localStorage.removeItem(exploreStorageKey);
+                }
+            }
             isLoading.value = true;
             try {
                 if (isAuthenticated) {
@@ -137,6 +163,7 @@
                 const response = await fetch(`/api/explore_spots?category=${currentCategory.value}`);
                 const data = await response.json();
                 exploreSpots.value = data.spots;
+                saveExploreState();
             } catch (error) {
                 console.error('載入失敗:', error);
                 // 測試用備用數據
@@ -145,6 +172,7 @@
                     { name: '一蘭拉麵', emoji: '🍜', tag: '美食', desc: '豚骨拉麵的經典代表作。', rating: 4.5 },
                     { name: '築地市場', emoji: '🍣', tag: '美食', desc: '最鮮美的海鮮生魚片都在這。', rating: 4.7 }
                 ];
+                saveExploreState();
             } finally {
                 isLoading.value = false;
             }
@@ -184,6 +212,14 @@
         const mapsUrl = (place) => `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(place)}`;
 
         Vue.onMounted(() => {
+            try {
+                const savedState = JSON.parse(localStorage.getItem(exploreStorageKey) || '{}');
+                if (categories.some(category => category.id === savedState.currentCategory)) {
+                    currentCategory.value = savedState.currentCategory;
+                }
+            } catch (error) {
+                localStorage.removeItem(exploreStorageKey);
+            }
             loadSpots();
             loadFavorites();
         });

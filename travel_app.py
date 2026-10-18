@@ -19,7 +19,7 @@ app = Flask(__name__, template_folder='templates')
 app.secret_key = 'ai_traveler_secret_key_2026'
 CORS(app, resources={r"/api/*": {"origins": "*"}})
 
-GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.0-flash-lite")
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.5-flash-lite")
 GEMINI_TIMEOUT_MS = int(os.getenv("GEMINI_TIMEOUT_MS", "60000"))
 
 spots = [
@@ -69,7 +69,7 @@ def generate_gemini_json(prompt: str, contents: Any = None) -> Any:
             ),
             "response_mime_type": "application/json",
             "temperature": 0.2,
-            "max_output_tokens": 2048,
+            "max_output_tokens": 8192,
         },
     )
     if not response.text:
@@ -307,7 +307,7 @@ def generate_itinerary():
 
     prompt = f"""
 規劃{city} {days}天旅行，日期從{start_date.strftime('%Y-%m-%d')}開始，風格：{style}。
-只回傳 JSON，不要解釋。每天只安排 2 個活動，按照時間排序。
+只回傳 JSON，不要解釋。每天至少安排 4 個活動，最多安排 6 個活動，按照時間排序。
 格式：{{"itinerary":[{{"day":1,"date":"YYYY-MM-DD","title":"短標題","description":"30字內摘要",
 "activities":[{{"time":"09:00","name":"明確景點或店名","place":"明確地點名稱","address":"簡短地址",
 "category":"景點","description":"20字內說明"}}]}}]}}
@@ -319,6 +319,13 @@ day 必須是 1 到 {days}，日期依序增加。category 只能是：食物、
         itinerary = result.get('itinerary') if isinstance(result, dict) else None
         if not isinstance(itinerary, list) or len(itinerary) != days:
             raise ValueError("Gemini returned an invalid itinerary shape.")
+        if any(
+            not isinstance(day_plan, dict)
+            or not isinstance(day_plan.get('activities'), list)
+            or len(day_plan['activities']) < 4
+            for day_plan in itinerary
+        ):
+            raise ValueError("Gemini returned fewer than four activities for a day.")
         normalized_itinerary = [
             normalize_day(
                 day_plan,
@@ -639,7 +646,7 @@ def replan():
         result = generate_gemini_json(f"""
 請重新安排 {city} 第 {target_day} 天的旅程，原因是「{reason}」。
 原本行程：{json.dumps(target_plan, ensure_ascii=False)}
-只替換這一天，請提供 2 至 4 個按照時間排序的明確地點或店名。
+只替換這一天，請提供至少 4 個、最多 6 個按照時間排序的明確地點或店名。
 回傳 JSON：{{"day":{target_day},"date":"{date_text}","title":"標題","description":"調整原因與建議",
 "activities":[{{"time":"09:00-11:00","name":"明確地點或店名","place":"可搜尋地點","address":"完整地址","category":"景點","description":"說明"}}]}}
 category 只能使用：食物、活動、購物、景點、酒店、交通、其他。
@@ -652,10 +659,14 @@ category 只能使用：食物、活動、購物、景點、酒店、交通、�
             'title': f'{city} 第 {target_day} 天（已依{reason}調整）',
             'description': f'因{reason}改安排室內或彈性景點。',
             'activities': [
-                {'time': '10:00-12:00', 'name': f'{city} 車站周邊', 'place': f'{city} 車站周邊',
+                {'time': '10:00-11:30', 'name': f'{city} 車站周邊', 'place': f'{city} 車站周邊',
                  'category': '交通', 'description': '保留交通彈性。'},
-                {'time': '12:30-14:00', 'name': fallback_activity, 'place': fallback_activity,
+                {'time': '12:00-13:30', 'name': fallback_activity, 'place': fallback_activity,
                  'category': '活動', 'description': '依突發狀況調整。'},
+                {'time': '14:00-15:30', 'name': f'{city} 室內文化景點', 'place': f'{city} 室內文化景點',
+                 'category': '景點', 'description': '安排室內行程，降低天候影響。'},
+                {'time': '16:00-17:30', 'name': f'{city} 在地商圈', 'place': f'{city} 在地商圈',
+                 'category': '購物', 'description': '保留自由探索與購物時間。'},
             ],
         }, city, target_day, date_text, include_maps=False)
     except Exception:
@@ -716,7 +727,7 @@ def recognize_image():
         return jsonify({'error': 'AI 圖片辨識失敗，請稍後再試。'}), 502
 
 # ==========================================
-# 註冊功能 (Register) - 支援 Profile 資料
+# 註冊功能 - 支援個人資料
 # ==========================================
 @app.route('/register', methods=['GET', 'POST'])
 def register():
@@ -760,7 +771,7 @@ def register():
     return render_template('register.html')
 
 # ==========================================
-# 登入功能 (Login)
+# 登入功能
 # ==========================================
 @app.route('/login', methods=['GET', 'POST'])
 def login():

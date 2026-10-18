@@ -4,7 +4,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>AI Travaler - 行程規劃</title>
+    <title>AI 旅遊助手 - 行程規劃</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
     <link rel="stylesheet" href="{{ url_for('static', filename='responsive.css') }}">
@@ -40,7 +40,7 @@
 <body class="bg-slate-50 text-slate-800">
     <header class="site-header">
         <nav class="site-nav">
-            <a href="/" class="site-brand text-2xl font-bold text-blue-600">AI Travaler</a>
+            <a href="/" class="site-brand text-2xl font-bold text-blue-600">AI 旅遊助手</a>
             <label class="nav-toggle-label" for="nav-toggle" aria-label="開啟導覽選單">☰</label>
             <input class="nav-toggle" id="nav-toggle" type="checkbox">
             <div class="nav-links font-medium">
@@ -369,7 +369,10 @@
                 body: JSON.stringify({ city: form.city, days: form.days, startDate: form.startDate, budget: form.budget })
             });
             const data = await response.json();
-            if (response.ok) insights.value = data;
+            if (response.ok) {
+                insights.value = data;
+                saveItinerary();
+            }
         };
 
         const saveGenerationRecord = async () => {
@@ -458,7 +461,17 @@
         };
 
         const saveItinerary = () => {
-            localStorage.setItem(itineraryStorageKey, JSON.stringify(itinerary.value || []));
+            localStorage.setItem(itineraryStorageKey, JSON.stringify({
+                itinerary: itinerary.value || [],
+                form: {
+                    city: form.city,
+                    days: form.days,
+                    startDate: form.startDate,
+                    budget: form.budget,
+                    style: form.style
+                },
+                insights: insights.value
+            }));
         };
 
         const startEdit = (day, index) => {
@@ -504,9 +517,32 @@
             const savedItinerary = localStorage.getItem(itineraryStorageKey);
             if (savedItinerary) {
                 try {
-                    const parsedItinerary = JSON.parse(savedItinerary);
-                    if (Array.isArray(parsedItinerary) && parsedItinerary.length) {
-                        itinerary.value = parsedItinerary;
+                    const parsedState = JSON.parse(savedItinerary);
+                    // 相容舊版只保存行程陣列的格式。
+                    const savedState = Array.isArray(parsedState)
+                        ? { itinerary: parsedState }
+                        : parsedState;
+                    if (savedState && Array.isArray(savedState.itinerary) && savedState.itinerary.length) {
+                        itinerary.value = savedState.itinerary;
+                        if (savedState.form && typeof savedState.form === 'object') {
+                            Object.assign(form, {
+                                city: typeof savedState.form.city === 'string' ? savedState.form.city : form.city,
+                                days: Number.isInteger(savedState.form.days) ? savedState.form.days : form.days,
+                                startDate: typeof savedState.form.startDate === 'string'
+                                    ? savedState.form.startDate
+                                    : form.startDate,
+                                budget: typeof savedState.form.budget === 'string'
+                                    ? savedState.form.budget
+                                    : form.budget,
+                                style: typeof savedState.form.style === 'string'
+                                    ? savedState.form.style
+                                    : form.style
+                            });
+                        }
+                        if (savedState.insights && typeof savedState.insights === 'object') {
+                            insights.value = savedState.insights;
+                        }
+                        targetDay.value = itinerary.value[0].day || 1;
                     }
                 } catch (error) {
                     localStorage.removeItem(itineraryStorageKey);
