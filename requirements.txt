@@ -5,3 +5,5 @@ werkzeug
 google-genai
 python-dotenv
 flask-cors
+python-docx
+pypdf

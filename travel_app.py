@@ -1,6 +1,7 @@
 import os
 import json
 import re
+from io import BytesIO
 from datetime import datetime, timedelta
 from typing import Any
 from urllib.parse import quote
@@ -11,6 +12,9 @@ from flask_cors import CORS
 from google import genai
 from google.genai import types
 from supabase import create_client, Client
+from werkzeug.utils import secure_filename
+from docx import Document
+from pypdf import PdfReader
 
 
 load_dotenv()
@@ -410,6 +414,57 @@ def get_favorites():
         return jsonify({'favorites': favorites})
     except Exception as error:
         return jsonify({'error': f'讀取收藏失敗：{error}'}), 500
+
+
+@app.post('/api/upload_itinerary')
+def upload_itinerary():
+    uploaded_file = request.files.get('file')
+    if uploaded_file is None or not uploaded_file.filename:
+        return jsonify({'error': '請選擇要上傳的檔案。'}), 400
+
+    filename = secure_filename(uploaded_file.filename)
+    extension = os.path.splitext(filename)[1].lower()
+    if extension not in {'.txt', '.doc', '.docx', '.pdf'}:
+        return jsonify({'error': '只支援 TXT、Word（DOC/DOCX）與 PDF 檔案。'}), 415
+
+    file_bytes = uploaded_file.read()
+    if not file_bytes:
+        return jsonify({'error': '檔案內容不可為空。'}), 400
+    if len(file_bytes) > 10 * 1024 * 1024:
+        return jsonify({'error': '檔案大小不可超過 10 MB。'}), 413
+
+    try:
+        if extension == '.txt':
+            try:
+                text = file_bytes.decode('utf-8-sig')
+            except UnicodeDecodeError:
+                text = file_bytes.decode('cp950')
+        elif extension == '.docx':
+            document = Document(BytesIO(file_bytes))
+            paragraphs = [paragraph.text.strip() for paragraph in document.paragraphs if paragraph.text.strip()]
+            table_rows = [
+                ' | '.join(cell.text.strip() for cell in row.cells)
+                for table in document.tables
+                for row in table.rows
+            ]
+            text = '\n'.join(paragraphs + [row for row in table_rows if row])
+        elif extension == '.pdf':
+            reader = PdfReader(BytesIO(file_bytes))
+            text = '\n'.join(page.extract_text() or '' for page in reader.pages).strip()
+        else:
+            return jsonify({'error': '舊式 DOC 檔案無法直接解析，請另存為 DOCX 後再上傳。'}), 415
+    except Exception:
+        app.logger.exception('Itinerary file parsing failed.')
+        return jsonify({'error': '檔案解析失敗，請確認檔案格式正確。'}), 422
+
+    text = text.strip()
+    if not text:
+        return jsonify({'error': '檔案中沒有可讀取的文字內容。'}), 422
+    return jsonify({
+        'fileName': filename,
+        'fileType': extension[1:].upper(),
+        'text': text[:100000],
+    })
 
 
 @app.post('/api/favorites')

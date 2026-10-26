@@ -114,7 +114,8 @@
 
             <!-- 行程結果與旅遊資訊區域 -->
             <div v-if="isGenerating || itinerary || insights || generationError" class="space-y-6">
-                <div v-if="isGenerating || generationError" class="bg-white p-8 rounded-3xl shadow-md text-center text-slate-500">
+                <div v-if="isGenerating || generationError"
+                    class="bg-white p-8 rounded-3xl shadow-md text-center text-slate-500">
                     AI 正在整理行程，最多等待 {{ generationSecondsLeft }} 秒<span class="loading-dots"></span>
                     <p v-if="generationError" class="mt-4 text-sm font-semibold text-red-600">{{ generationError }}</p>
                 </div>
@@ -144,15 +145,19 @@
                                         :key="`${index}-${activityIndex}`"
                                         class="rounded-xl bg-slate-50 px-3 py-2 text-sm">
                                         <div class="flex flex-wrap items-center gap-2">
-                                            <span class="font-semibold text-slate-700">{{ activityLabel(activity) }}</span>
+                                            <span class="font-semibold text-slate-700">{{ activityLabel(activity)
+                                                }}</span>
                                             <span v-if="activity.category"
                                                 class="rounded-full bg-blue-100 px-2 py-0.5 text-xs text-blue-700">
                                                 {{ activity.category }}
                                             </span>
-                                            <span v-if="activity.time" class="text-xs text-slate-500">{{ activity.time }}</span>
+                                            <span v-if="activity.time" class="text-xs text-slate-500">{{ activity.time
+                                                }}</span>
                                         </div>
-                                        <p v-if="activity.address" class="text-xs text-slate-500 mt-1">{{ activity.address }}</p>
-                                        <p v-if="activity.description" class="text-xs text-slate-500 mt-1">{{ activity.description }}</p>
+                                        <p v-if="activity.address" class="text-xs text-slate-500 mt-1">{{
+                                            activity.address }}</p>
+                                        <p v-if="activity.description" class="text-xs text-slate-500 mt-1">{{
+                                            activity.description }}</p>
                                     </div>
                                 </div>
                             </div>
