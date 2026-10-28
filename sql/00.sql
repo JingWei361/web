@@ -76,6 +76,27 @@ create index if not exists idx_ai_generation_records_user_id on public.ai_genera
 create index if not exists idx_ai_generation_favorites_user_id on public.ai_generation_favorites (user_id);
 create index if not exists idx_search_history_user_id on public.search_history (user_id);
 
+-- 使用者上傳檔案：檔案本體存於 private Supabase Storage bucket
+create table if not exists public.user_uploaded_files (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references auth.users (id) on delete cascade,
+  title text not null,
+  original_filename text not null,
+  storage_path text not null unique,
+  mime_type text,
+  size_bytes bigint not null check (size_bytes > 0),
+  extracted_text text not null default '',
+  created_at timestamptz not null default timezone('utc'::text, now()),
+  updated_at timestamptz not null default timezone('utc'::text, now())
+);
+
+create index if not exists idx_user_uploaded_files_user_id
+on public.user_uploaded_files (user_id);
+
+insert into storage.buckets (id, name, public, file_size_limit)
+values ('user-files', 'user-files', false, 10485760)
+on conflict (id) do update set public = false, file_size_limit = 10485760;
+
 -- 自動同步 Supabase Auth 使用者資料到 profiles
 create or replace function public.handle_new_user()
 returns trigger
@@ -142,6 +163,59 @@ alter table public.ai_recommendation_favorites enable row level security;
 alter table public.ai_generation_records enable row level security;
 alter table public.ai_generation_favorites enable row level security;
 alter table public.search_history enable row level security;
+alter table public.user_uploaded_files enable row level security;
+
+-- user_uploaded_files policies
+drop policy if exists "Users can read own uploaded files" on public.user_uploaded_files;
+create policy "Users can read own uploaded files"
+on public.user_uploaded_files
+for select
+using (auth.uid() = user_id);
+
+drop policy if exists "Users can insert own uploaded files" on public.user_uploaded_files;
+create policy "Users can insert own uploaded files"
+on public.user_uploaded_files
+for insert
+with check (auth.uid() = user_id);
+
+drop policy if exists "Users can update own uploaded files" on public.user_uploaded_files;
+create policy "Users can update own uploaded files"
+on public.user_uploaded_files
+for update
+using (auth.uid() = user_id)
+with check (auth.uid() = user_id);
+
+drop policy if exists "Users can delete own uploaded files" on public.user_uploaded_files;
+create policy "Users can delete own uploaded files"
+on public.user_uploaded_files
+for delete
+using (auth.uid() = user_id);
+
+-- Storage object policies: object path 的第一層必須是目前使用者 UUID
+drop policy if exists "Users can read own stored files" on storage.objects;
+create policy "Users can read own stored files"
+on storage.objects
+for select
+using (bucket_id = 'user-files' and (storage.foldername(name))[1] = auth.uid()::text);
+
+drop policy if exists "Users can upload own stored files" on storage.objects;
+create policy "Users can upload own stored files"
+on storage.objects
+for insert
+with check (bucket_id = 'user-files' and (storage.foldername(name))[1] = auth.uid()::text);
+
+drop policy if exists "Users can update own stored files" on storage.objects;
+create policy "Users can update own stored files"
+on storage.objects
+for update
+using (bucket_id = 'user-files' and (storage.foldername(name))[1] = auth.uid()::text)
+with check (bucket_id = 'user-files' and (storage.foldername(name))[1] = auth.uid()::text);
+
+drop policy if exists "Users can delete own stored files" on storage.objects;
+create policy "Users can delete own stored files"
+on storage.objects
+for delete
+using (bucket_id = 'user-files' and (storage.foldername(name))[1] = auth.uid()::text);
 
 -- profiles policies
 drop policy if exists "Users can read own profile" on public.profiles;

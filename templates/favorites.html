@@ -52,14 +52,17 @@
                 <h3 class="text-2xl font-bold mb-4">自己上傳</h3>
                 <div class="rounded-2xl bg-white p-5 shadow-sm">
                     <form @submit.prevent="uploadFile" class="flex flex-col gap-3 sm:flex-row sm:items-center">
-                        <input type="file" accept=".txt,.doc,.docx,.pdf" @change="selectUploadFile"
+                        <input type="file" @change="selectUploadFile"
                             class="min-w-0 flex-1 rounded-xl border border-slate-200 px-3 py-2 text-sm">
+                        <input v-model="uploadTitle" type="text" placeholder="輸入檔案標題" :disabled="isUploading"
+                            class="min-w-0 flex-1 rounded-xl border border-slate-200 px-3 py-3 outline-none focus:border-blue-500"
+                            aria-label="檔案標題">
                         <button type="submit" :disabled="!selectedUploadFile || isUploading"
                             class="rounded-xl bg-emerald-600 px-5 py-3 font-bold text-white transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-50">
                             {{ isUploading ? '上傳中...' : '上傳檔案' }}
                         </button>
                     </form>
-                    <p class="mt-2 text-xs text-slate-500">支援 TXT、DOC、DOCX、PDF，單一檔案最多 10 MB。</p>
+                    <p class="mt-2 text-xs text-slate-500">不限制檔案類型，單一檔案最多 10 MB。</p>
                     <p v-if="uploadError" class="mt-3 text-sm text-red-500">{{ uploadError }}</p>
                 </div>
                 <div v-if="uploadedFiles.length" class="mt-4 space-y-3">
@@ -67,14 +70,17 @@
                         <div class="flex items-start gap-3">
                             <div class="text-2xl">📄</div>
                             <div class="min-w-0 flex-1">
-                                <p class="font-bold break-words">{{ file.fileName }}</p>
+                                <p class="font-bold break-words">{{ file.title }}</p>
                                 <p class="text-xs text-slate-500">{{ file.fileType }} · {{ file.createdAt }}</p>
                             </div>
-                            <button @click="removeUpload(file)" type="button" class="text-slate-300 hover:text-red-500"
-                                aria-label="刪除上傳檔案">🗑️</button>
+                            <button @click="toggleUploadDetails(file)" type="button"
+                                class="text-sm font-bold text-blue-600 hover:text-blue-800">
+                                展開詳情
+                            </button>
+                            <button @click="requestDelete('upload', file)" type="button"
+                                class="text-slate-300 hover:text-red-500" aria-label="刪除上傳檔案">🗑️</button>
                         </div>
-                        <pre
-                            class="mt-3 max-h-56 overflow-auto whitespace-pre-wrap rounded-xl bg-slate-50 p-3 text-sm leading-relaxed text-slate-600">{{ file.text }}</pre>
+                        <p class="mt-2 text-xs text-slate-400">原始檔案：{{ file.fileName }}</p>
                     </article>
                 </div>
                 <p v-else
@@ -97,15 +103,10 @@
                             <button @click="selectSpot(spot)" type="button"
                                 class="text-sm font-bold text-blue-600 hover:text-blue-800 px-3"
                                 :aria-expanded="selectedSpot === spot">
-                                {{ selectedSpot === spot ? '收合' : '查看介紹' }}
+                                查看介紹
                             </button>
-                            <button @click="remove(spot)" class="text-slate-300 hover:text-red-500 px-2 text-xl"
-                                aria-label="取消景點收藏">🗑️</button>
-                        </div>
-                        <div v-if="selectedSpot === spot" class="border-t border-slate-100 mt-4 pt-4">
-                            <p v-if="spot.desc" class="text-sm text-slate-600 leading-relaxed">{{ spot.desc }}</p>
-                            <p v-else class="text-sm text-slate-500">這筆收藏沒有可顯示的介紹。</p>
-                            <p v-if="spot.rating" class="text-xs text-amber-500 font-bold mt-3">⭐ {{ spot.rating }}</p>
+                            <button @click="requestDelete('spot', spot)"
+                                class="text-slate-300 hover:text-red-500 px-2 text-xl" aria-label="取消景點收藏">🗑️</button>
                         </div>
                     </div>
                 </div>
@@ -132,52 +133,10 @@
                             <button @click="selectGeneration(item)" type="button"
                                 class="text-sm font-bold text-blue-600 hover:text-blue-800 px-3"
                                 :aria-expanded="selectedGeneration === item">
-                                {{ selectedGeneration === item ? '收合' : '展開詳情' }}
+                                展開詳情
                             </button>
-                            <button @click.stop="removeGeneration(item)"
+                            <button @click.stop="requestDelete('generation', item)"
                                 class="text-slate-300 hover:text-red-500 px-2 text-xl" aria-label="取消行程收藏">🗑️</button>
-                        </div>
-                        <div v-if="selectedGeneration === item" class="border-t border-slate-100 mt-4 pt-4">
-                            <div v-if="item.record.prompt" class="mb-4 rounded-xl bg-blue-50 p-4">
-                                <p class="text-xs font-bold text-blue-600 mb-1">行程需求</p>
-                                <p class="text-sm text-slate-600">{{ item.record.prompt }}</p>
-                            </div>
-                            <div v-if="getItinerary(item).length" class="space-y-3">
-                                <article v-for="day in getItinerary(item)" :key="day.day"
-                                    class="border border-slate-100 rounded-xl p-4">
-                                    <div class="flex flex-wrap items-center gap-x-3 gap-y-1 mb-2">
-                                        <p class="font-bold text-blue-600">第 {{ day.day }} 天</p>
-                                        <p class="text-xs text-blue-500">{{ day.date || '日期未設定' }}</p>
-                                        <a v-if="day.mapsUrl" :href="day.mapsUrl" target="_blank" rel="noopener"
-                                            class="text-xs font-bold text-blue-600 hover:text-blue-800">🗺️ 依序導航</a>
-                                    </div>
-                                    <p class="font-semibold">{{ day.title }}</p>
-                                    <p v-if="day.description || day.introduction"
-                                        class="text-sm text-slate-600 leading-relaxed mt-2">
-                                        {{ day.description || day.introduction }}
-                                    </p>
-                                    <div v-if="(day.activities || []).length" class="mt-3 space-y-2">
-                                        <div v-for="activity in day.activities"
-                                            class="rounded-lg bg-slate-50 px-3 py-2 text-sm">
-                                            <span class="font-semibold text-slate-600">
-                                                {{ typeof activity === 'string' ? activity : (activity.name ||
-                                                activity.place) }}
-                                            </span>
-                                            <span v-if="activity.category" class="ml-2 text-xs text-blue-600">
-                                                {{ activity.category }}
-                                            </span>
-                                            <span v-if="activity.time" class="ml-2 text-xs text-slate-500">{{
-                                                activity.time }}</span>
-                                            <a v-if="activity.mapsUrl" :href="activity.mapsUrl" target="_blank"
-                                                rel="noopener"
-                                                class="float-right text-xs font-bold text-blue-600 hover:text-blue-800">導航</a>
-                                            <p v-if="activity.address" class="text-xs text-slate-500 mt-1">{{
-                                                activity.address }}</p>
-                                        </div>
-                                    </div>
-                                </article>
-                            </div>
-                            <p v-else class="text-sm text-slate-500">這筆行程沒有可顯示的詳細內容。</p>
                         </div>
                     </div>
                 </div>
@@ -185,6 +144,91 @@
                 <p v-else class="rounded-2xl border-2 border-dashed border-slate-200 py-10 text-center text-slate-400">
                     目前沒有 AI 生成行程。
                 </p>
+            </section>
+
+            <div v-if="selectedSpot || selectedGeneration || selectedUploadDetails"
+                class="fixed inset-0 z-40 bg-slate-900/40" @click.self="closeDetails">
+                <aside class="absolute right-0 top-0 h-full w-full max-w-xl overflow-y-auto bg-white p-6 shadow-2xl">
+                    <div class="flex items-center justify-between border-b border-slate-100 pb-4">
+                        <h3 class="text-xl font-bold">
+                            {{ selectedSpot ? selectedSpot.name : selectedGeneration ? selectedGeneration.record.title :
+                            selectedUploadDetails?.title }}
+                        </h3>
+                        <button @click="closeDetails" type="button" class="text-2xl text-slate-400 hover:text-slate-700"
+                            aria-label="關閉詳情">&times;</button>
+                    </div>
+
+                    <div v-if="selectedUploadDetails" class="pt-5">
+                        <p class="mb-3 text-sm text-slate-500">{{ selectedUploadDetails.fileName }}</p>
+                        <pre
+                            class="max-h-[70vh] overflow-auto whitespace-pre-wrap rounded-xl bg-slate-50 p-4 text-sm leading-relaxed text-slate-600">{{ selectedUploadDetails.text }}</pre>
+                    </div>
+                    <div v-else-if="selectedSpot" class="pt-5">
+                        <p v-if="selectedSpot.desc" class="text-sm leading-relaxed text-slate-600">{{ selectedSpot.desc
+                            }}</p>
+                        <p v-else class="text-sm text-slate-500">這筆收藏沒有可顯示的介紹。</p>
+                        <p v-if="selectedSpot.rating" class="mt-3 text-sm font-bold text-amber-500">⭐ {{
+                            selectedSpot.rating }}</p>
+                    </div>
+                    <div v-else-if="selectedGeneration" class="space-y-4 pt-5">
+                        <div v-if="selectedGeneration.record.prompt" class="rounded-xl bg-blue-50 p-4">
+                            <p class="mb-1 text-xs font-bold text-blue-600">行程需求</p>
+                            <p class="text-sm text-slate-600">{{ selectedGeneration.record.prompt }}</p>
+                        </div>
+                        <div v-if="getItinerary(selectedGeneration).length" class="space-y-3">
+                            <article v-for="day in getItinerary(selectedGeneration)" :key="day.day"
+                                class="rounded-xl border border-slate-100 p-4">
+                                <div class="mb-2 flex flex-wrap items-center gap-x-3 gap-y-1">
+                                    <p class="font-bold text-blue-600">第 {{ day.day }} 天</p>
+                                    <p class="text-xs text-blue-500">{{ day.date || '日期未設定' }}</p>
+                                    <a v-if="day.mapsUrl" :href="day.mapsUrl" target="_blank" rel="noopener"
+                                        class="text-xs font-bold text-blue-600 hover:text-blue-800">🗺️ 依序導航</a>
+                                </div>
+                                <p class="font-semibold">{{ day.title }}</p>
+                                <p v-if="day.description || day.introduction"
+                                    class="mt-2 text-sm leading-relaxed text-slate-600">
+                                    {{ day.description || day.introduction }}
+                                </p>
+                                <div v-if="(day.activities || []).length" class="mt-3 space-y-2">
+                                    <div v-for="activity in day.activities"
+                                        class="rounded-lg bg-slate-50 px-3 py-2 text-sm">
+                                        <span class="font-semibold text-slate-600">
+                                            {{ typeof activity === 'string' ? activity : (activity.name ||
+                                            activity.place) }}
+                                        </span>
+                                        <span v-if="activity.category" class="ml-2 text-xs text-blue-600">{{
+                                            activity.category }}</span>
+                                        <span v-if="activity.time" class="ml-2 text-xs text-slate-500">{{ activity.time
+                                            }}</span>
+                                        <a v-if="activity.mapsUrl" :href="activity.mapsUrl" target="_blank"
+                                            rel="noopener"
+                                            class="float-right text-xs font-bold text-blue-600 hover:text-blue-800">導航</a>
+                                        <p v-if="activity.address" class="mt-1 text-xs text-slate-500">{{
+                                            activity.address }}</p>
+                                    </div>
+                                </div>
+                            </article>
+                        </div>
+                        <p v-else class="text-sm text-slate-500">這筆行程沒有可顯示的詳細內容。</p>
+                    </div>
+                </aside>
+            </div>
+
+            <div v-if="deleteTarget" class="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 px-4"
+                @click.self="cancelDelete">
+                <div class="w-full max-w-md rounded-2xl bg-white p-6 shadow-2xl">
+                    <h3 class="text-xl font-bold text-red-600">永久刪除</h3>
+                    <p class="mt-3 text-slate-600">刪除後無法恢復，確定要刪除「{{ deleteTargetLabel }}」嗎？</p>
+                    <div class="mt-6 flex justify-end gap-3">
+                        <button @click="cancelDelete" type="button"
+                            class="rounded-xl border border-slate-200 px-4 py-2 font-bold text-slate-600 hover:bg-slate-50">取消</button>
+                        <button @click="confirmDelete" type="button" :disabled="isDeleting"
+                            class="rounded-xl bg-red-600 px-4 py-2 font-bold text-white hover:bg-red-700 disabled:opacity-50">
+                            {{ isDeleting ? '刪除中...' : '確認永久刪除' }}
+                        </button>
+                    </div>
+                </div>
+            </div>
     </div>
     {% endraw %}
     </section>
@@ -198,10 +242,12 @@
         const generationFavorites = Vue.ref([]);
         const selectedSpot = Vue.ref(null);
         const selectedGeneration = Vue.ref(null);
-        const storageScope = {{ (user or 'guest') | tojson }};
-        const uploadStorageKey = `my_travel_uploads_${storageScope}`;
         const uploadedFiles = Vue.ref([]);
         const selectedUploadFile = Vue.ref(null);
+        const uploadTitle = Vue.ref('');
+        const selectedUploadDetails = Vue.ref(null);
+        const deleteTarget = Vue.ref(null);
+        const isDeleting = Vue.ref(false);
         const isUploading = Vue.ref(false);
         const uploadError = Vue.ref('');
         const searchInput = Vue.ref('');
@@ -209,15 +255,11 @@
         const runSearch = () => {
             searchQuery.value = searchInput.value;
         };
-        const saveUploadedFiles = () => {
-            try {
-                localStorage.setItem(uploadStorageKey, JSON.stringify(uploadedFiles.value));
-            } catch (error) {
-                uploadError.value = '檔案太大，無法保存到瀏覽器。';
-            }
-        };
         const selectUploadFile = (event) => {
             selectedUploadFile.value = event.target.files[0] || null;
+            if (selectedUploadFile.value && !uploadTitle.value.trim()) {
+                uploadTitle.value = selectedUploadFile.value.name;
+            }
             uploadError.value = '';
         };
         const uploadFile = async () => {
@@ -226,20 +268,14 @@
             uploadError.value = '';
             const formData = new FormData();
             formData.append('file', selectedUploadFile.value);
+            formData.append('title', uploadTitle.value.trim());
             try {
                 const response = await fetch('/api/upload_itinerary', { method: 'POST', body: formData });
                 const data = await response.json().catch(() => ({}));
                 if (!response.ok) throw new Error(data.error || '檔案上傳失敗。');
-                uploadedFiles.value.unshift({
-                    id: `${Date.now()}-${data.fileName}`,
-                    fileName: data.fileName,
-                    fileType: data.fileType,
-                    text: data.text,
-                    createdAt: new Date().toLocaleString('zh-TW')
-                });
-                uploadedFiles.value = uploadedFiles.value.slice(0, 10);
-                saveUploadedFiles();
+                uploadedFiles.value.unshift(data.file);
                 selectedUploadFile.value = null;
+                uploadTitle.value = '';
                 document.querySelector('input[type="file"]').value = '';
             } catch (error) {
                 uploadError.value = error.message || '檔案上傳失敗。';
@@ -247,9 +283,57 @@
                 isUploading.value = false;
             }
         };
-        const removeUpload = (file) => {
-            uploadedFiles.value = uploadedFiles.value.filter(item => item.id !== file.id);
-            saveUploadedFiles();
+        const requestDelete = (type, item) => {
+            deleteTarget.value = { type, item };
+        };
+        const cancelDelete = () => {
+            if (!isDeleting.value) deleteTarget.value = null;
+        };
+        const deleteTargetLabel = Vue.computed(() => {
+            const target = deleteTarget.value;
+            if (!target) return '';
+            if (target.type === 'upload') return target.item.title || target.item.fileName;
+            if (target.type === 'generation') return target.item.record.title;
+            return target.item.name;
+        });
+        const confirmDelete = async () => {
+            const target = deleteTarget.value;
+            if (!target) return;
+            isDeleting.value = true;
+            try {
+                let endpoint = '';
+                if (target.type === 'upload') endpoint = `/api/uploaded-files/${target.item.id}`;
+                if (target.type === 'spot') endpoint = `/api/favorites/${target.item.recommendationId}`;
+                if (target.type === 'generation') endpoint = `/api/generation-favorites/${target.item.generation_record_id}`;
+                const response = await fetch(endpoint, { method: 'DELETE' });
+                const data = await response.json().catch(() => ({}));
+                if (!response.ok) throw new Error(data.error || '刪除檔案失敗。');
+            } catch (error) {
+                uploadError.value = error.message || '刪除檔案失敗。';
+                return;
+            } finally {
+                isDeleting.value = false;
+            }
+            if (target.type === 'upload') {
+                uploadedFiles.value = uploadedFiles.value.filter(item => item.id !== target.item.id);
+                if (selectedUploadDetails.value?.id === target.item.id) selectedUploadDetails.value = null;
+            }
+            if (target.type === 'spot') {
+                favorites.value = favorites.value.filter(item => item.recommendationId !== target.item.recommendationId);
+                if (selectedSpot.value === target.item) selectedSpot.value = null;
+            }
+            if (target.type === 'generation') {
+                generationFavorites.value = generationFavorites.value.filter(
+                    item => item.generation_record_id !== target.item.generation_record_id
+                );
+                if (selectedGeneration.value === target.item) selectedGeneration.value = null;
+            }
+            deleteTarget.value = null;
+        };
+        const toggleUploadDetails = (file) => {
+            selectedUploadDetails.value = file;
+            selectedSpot.value = null;
+            selectedGeneration.value = null;
         };
         const filteredFavorites = Vue.computed(() => {
             const query = searchQuery.value.trim().toLowerCase();
@@ -260,12 +344,13 @@
                 )
             );
         });
-        try {
-            const savedUploads = JSON.parse(localStorage.getItem(uploadStorageKey) || '[]');
-            uploadedFiles.value = Array.isArray(savedUploads) ? savedUploads : [];
-        } catch (error) {
-            localStorage.removeItem(uploadStorageKey);
-        }
+        const loadUploadedFiles = async () => {
+            const response = await fetch('/api/uploaded-files');
+            if (response.ok) {
+                const data = await response.json();
+                uploadedFiles.value = data.files || [];
+            }
+        };
         const filteredGenerationFavorites = Vue.computed(() => {
             const query = searchQuery.value.trim().toLowerCase();
             if (!query) return generationFavorites.value;
@@ -287,29 +372,23 @@
             }
         };
         const selectGeneration = (item) => {
-            selectedGeneration.value = selectedGeneration.value === item ? null : item;
-        };
-        const remove = async (spot) => {
-            const response = await fetch(`/api/favorites/${spot.recommendationId}`, { method: 'DELETE' });
-            if (response.ok) {
-                if (selectedSpot.value === spot) selectedSpot.value = null;
-                favorites.value = favorites.value.filter(f => f.recommendationId !== spot.recommendationId);
-            }
+            selectedGeneration.value = item;
+            selectedSpot.value = null;
+            selectedUploadDetails.value = null;
         };
         const selectSpot = (spot) => {
-            selectedSpot.value = selectedSpot.value === spot ? null : spot;
+            selectedSpot.value = spot;
+            selectedGeneration.value = null;
+            selectedUploadDetails.value = null;
         };
-        const removeGeneration = async (item) => {
-            const response = await fetch(`/api/generation-favorites/${item.generation_record_id}`, { method: 'DELETE' });
-            if (response.ok) {
-                if (selectedGeneration.value === item) selectedGeneration.value = null;
-                generationFavorites.value = generationFavorites.value.filter(
-                    favorite => favorite.generation_record_id !== item.generation_record_id
-                );
-            }
+        const closeDetails = () => {
+            selectedSpot.value = null;
+            selectedGeneration.value = null;
+            selectedUploadDetails.value = null;
         };
         Vue.onMounted(async () => {
             if (!isAuthenticated) return;
+            await loadUploadedFiles();
             const [favoriteResponse, generationResponse] = await Promise.all([
                 fetch('/api/favorites'),
                 fetch('/api/generation-favorites')
@@ -323,7 +402,7 @@
                 generationFavorites.value = data.favorites || [];
             }
         });
-        return { favorites, generationFavorites, filteredFavorites, filteredGenerationFavorites, uploadedFiles, selectedUploadFile, isUploading, uploadError, searchInput, searchQuery, runSearch, selectUploadFile, uploadFile, removeUpload, selectedSpot, selectedGeneration, getItinerary, selectSpot, selectGeneration, remove, removeGeneration };
+        return { favorites, generationFavorites, filteredFavorites, filteredGenerationFavorites, uploadedFiles, selectedUploadFile, uploadTitle, isUploading, uploadError, selectedUploadDetails, deleteTarget, deleteTargetLabel, isDeleting, searchInput, searchQuery, runSearch, selectUploadFile, uploadFile, toggleUploadDetails, requestDelete, cancelDelete, confirmDelete, closeDetails, selectedSpot, selectedGeneration, getItinerary, selectSpot, selectGeneration };
         }
         }).mount('#app');
     </script>

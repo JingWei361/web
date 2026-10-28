@@ -1,10 +1,12 @@
 import os
 import json
 import re
+import mimetypes
 from io import BytesIO
 from datetime import datetime, timedelta
 from typing import Any
 from urllib.parse import quote
+from uuid import uuid4
 
 from dotenv import load_dotenv
 from flask import Flask, flash, jsonify, redirect, render_template, request, session, url_for
@@ -25,6 +27,7 @@ CORS(app, resources={r"/api/*": {"origins": "*"}})
 
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.5-flash-lite")
 GEMINI_TIMEOUT_MS = int(os.getenv("GEMINI_TIMEOUT_MS", "60000"))
+UPLOAD_BUCKET = 'user-files'
 
 spots = [
     {'name': '雷門', 'emoji': '⛩️', 'tag': '景點', 'category': 'attraction', 'desc': '充滿歷史感的紅色大燈籠。', 'rating': 4.8},
@@ -418,20 +421,26 @@ def get_favorites():
 
 @app.post('/api/upload_itinerary')
 def upload_itinerary():
+    user_client, user_id, error = authentication_required()
+    if error:
+        return error
     uploaded_file = request.files.get('file')
     if uploaded_file is None or not uploaded_file.filename:
         return jsonify({'error': '請選擇要上傳的檔案。'}), 400
 
-    filename = secure_filename(uploaded_file.filename)
+    filename = secure_filename(uploaded_file.filename) or f'uploaded-{uuid4().hex}'
     extension = os.path.splitext(filename)[1].lower()
-    if extension not in {'.txt', '.doc', '.docx', '.pdf'}:
-        return jsonify({'error': '只支援 TXT、Word（DOC/DOCX）與 PDF 檔案。'}), 415
 
     file_bytes = uploaded_file.read()
     if not file_bytes:
         return jsonify({'error': '檔案內容不可為空。'}), 400
     if len(file_bytes) > 10 * 1024 * 1024:
         return jsonify({'error': '檔案大小不可超過 10 MB。'}), 413
+    title = str(request.form.get('title') or filename).strip()
+    if not title:
+        return jsonify({'error': '檔案標題不可為空。'}), 400
+    if len(title) > 200:
+        return jsonify({'error': '檔案標題不可超過 200 個字。'}), 400
 
     try:
         if extension == '.txt':
@@ -452,19 +461,92 @@ def upload_itinerary():
             reader = PdfReader(BytesIO(file_bytes))
             text = '\n'.join(page.extract_text() or '' for page in reader.pages).strip()
         else:
-            return jsonify({'error': '舊式 DOC 檔案無法直接解析，請另存為 DOCX 後再上傳。'}), 415
+            try:
+                text = file_bytes.decode('utf-8-sig')
+            except UnicodeDecodeError:
+                try:
+                    text = file_bytes.decode('cp950')
+                except UnicodeDecodeError:
+                    text = '此檔案格式已保存，但目前無法直接預覽內容。'
     except Exception:
         app.logger.exception('Itinerary file parsing failed.')
         return jsonify({'error': '檔案解析失敗，請確認檔案格式正確。'}), 422
 
     text = text.strip()
     if not text:
-        return jsonify({'error': '檔案中沒有可讀取的文字內容。'}), 422
-    return jsonify({
-        'fileName': filename,
-        'fileType': extension[1:].upper(),
-        'text': text[:100000],
-    })
+        text = '此檔案格式已保存，但檔案中沒有可讀取的文字內容。'
+    storage_path = f'{user_id}/{uuid4().hex}-{filename}'
+    mime_type = uploaded_file.mimetype or mimetypes.guess_type(filename)[0] or 'application/octet-stream'
+    try:
+        user_client.storage.from_(UPLOAD_BUCKET).upload(
+            storage_path,
+            file_bytes,
+            file_options={'content-type': mime_type, 'upsert': False},
+        )
+        record = user_client.table('user_uploaded_files').insert({
+            'user_id': user_id,
+            'title': title,
+            'original_filename': filename,
+            'storage_path': storage_path,
+            'mime_type': mime_type,
+            'size_bytes': len(file_bytes),
+            'extracted_text': text[:100000],
+        }).execute().data[0]
+    except Exception:
+        try:
+            user_client.storage.from_(UPLOAD_BUCKET).remove([storage_path])
+        except Exception:
+            app.logger.exception('Uploaded file cleanup failed.')
+        app.logger.exception('Uploaded file persistence failed.')
+        return jsonify({'error': '檔案儲存失敗，請稍後再試。'}), 500
+    return jsonify({'file': serialize_uploaded_file(record)}), 201
+
+
+def serialize_uploaded_file(record: dict[str, Any]) -> dict[str, Any]:
+    return {
+        'id': record['id'],
+        'title': record['title'],
+        'fileName': record['original_filename'],
+        'fileType': (os.path.splitext(record['original_filename'])[1][1:] or 'FILE').upper(),
+        'mimeType': record.get('mime_type'),
+        'sizeBytes': record.get('size_bytes'),
+        'text': record.get('extracted_text') or '',
+        'createdAt': record.get('created_at'),
+    }
+
+
+@app.get('/api/uploaded-files')
+def get_uploaded_files():
+    user_client, user_id, error = authentication_required()
+    if error:
+        return error
+    try:
+        rows = user_client.table('user_uploaded_files').select(
+            'id, title, original_filename, mime_type, size_bytes, extracted_text, created_at'
+        ).eq('user_id', user_id).order('created_at', desc=True).execute().data or []
+        return jsonify({'files': [serialize_uploaded_file(row) for row in rows]})
+    except Exception as error:
+        return jsonify({'error': f'讀取上傳檔案失敗：{error}'}), 500
+
+
+@app.delete('/api/uploaded-files/<file_id>')
+def delete_uploaded_file(file_id):
+    user_client, user_id, error = authentication_required()
+    if error:
+        return error
+    try:
+        rows = user_client.table('user_uploaded_files').select('storage_path').eq(
+            'id', file_id
+        ).eq('user_id', user_id).limit(1).execute().data or []
+        if not rows:
+            return jsonify({'error': '找不到上傳檔案。'}), 404
+        user_client.storage.from_(UPLOAD_BUCKET).remove([rows[0]['storage_path']])
+        user_client.table('user_uploaded_files').delete().eq(
+            'id', file_id
+        ).eq('user_id', user_id).execute()
+        return jsonify({'message': '已刪除上傳檔案。'})
+    except Exception as error:
+        return jsonify({'error': f'刪除上傳檔案失敗：{error}'}), 500
 
 
 @app.post('/api/favorites')
