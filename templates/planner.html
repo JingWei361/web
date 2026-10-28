@@ -54,7 +54,7 @@
                 <a href="/login" class="hover:text-blue-600">登入</a>
                 <a href="/register" class="hover:text-blue-600">註冊</a>
                 {% else %}
-                <span>歡迎, {{ name }}</span>
+                <span>歡迎, {{ name or user }}</span>
                 <a href="/logout" class="hover:text-blue-600">登出</a>
                 {% endif %}
             </div>
@@ -129,6 +129,10 @@
                                 class="text-sm font-bold text-amber-600 hover:text-amber-700">
                                 {{ isItineraryFavorite ? '★ 已收藏行程' : '☆ 收藏這份行程' }}
                             </button>
+                            <button @click="shareItinerary" type="button"
+                                class="text-sm font-bold text-blue-600 hover:text-blue-800">分享</button>
+                            <button @click="downloadItinerary" type="button"
+                                class="text-sm font-bold text-blue-600 hover:text-blue-800">下載</button>
                             <span class="text-sm text-slate-500">可刪除不需要的行程日</span>
                         </div>
                     </div>
@@ -284,6 +288,60 @@
         const activityLabel = (activity) => typeof activity === 'string'
             ? activity
             : (activity.name || activity.place || '未命名行程');
+        const itineraryText = () => {
+            const lines = [`${form.city || 'AI'} 旅遊行程`, ''];
+            (itinerary.value || []).forEach(day => {
+                lines.push(`第 ${day.day} 天｜${day.date || ''}｜${day.title || ''}`);
+                if (day.description) lines.push(day.description);
+                (day.activities || []).forEach(activity => {
+                    if (typeof activity === 'string') {
+                        lines.push(`- ${activity}`);
+                        return;
+                    }
+                    lines.push(`- ${activity.time ? `${activity.time} ` : ''}${activity.name || activity.place || '未命名活動'}${activity.address ? `（${activity.address}）` : ''}`);
+                    if (activity.description) lines.push(`  ${activity.description}`);
+                });
+                lines.push('');
+            });
+            return lines.join('\n');
+        };
+        const downloadItinerary = () => {
+            if (!itinerary.value?.length) return;
+            const blob = new Blob([itineraryText()], { type: 'text/plain;charset=utf-8' });
+            const link = document.createElement('a');
+            link.href = URL.createObjectURL(blob);
+            link.download = `${form.city || 'AI'}-旅遊行程.txt`;
+            link.click();
+            URL.revokeObjectURL(link.href);
+        };
+        const shareItinerary = async () => {
+            if (!itinerary.value?.length) return;
+            const text = itineraryText();
+            try {
+                if (navigator.share) {
+                    await navigator.share({ title: `${form.city || 'AI'} 旅遊行程`, text });
+                    return;
+                }
+                if (navigator.clipboard?.writeText) {
+                    await navigator.clipboard.writeText(text);
+                    alert('行程內容已複製，可以貼上分享給朋友。');
+                    return;
+                }
+                const textarea = document.createElement('textarea');
+                textarea.value = text;
+                textarea.setAttribute('readonly', '');
+                textarea.style.position = 'fixed';
+                textarea.style.opacity = '0';
+                document.body.appendChild(textarea);
+                textarea.select();
+                const copied = document.execCommand('copy');
+                textarea.remove();
+                if (!copied) throw new Error('COPY_NOT_SUPPORTED');
+                alert('行程內容已複製，可以貼上分享給朋友。');
+            } catch (error) {
+                if (error.name !== 'AbortError') alert('分享失敗，請稍後再試。');
+            }
+        };
 
         // 更新 form 物件增加 budget 與 style
         const form = Vue.reactive({
@@ -561,7 +619,7 @@
             form, today, isGenerating, itinerary, insights, isReplanning, targetDay, changeReason, replanMessage,
             editingIndex, editDraft, isItineraryFavorite, toggleItineraryFavorite, toggleFavorite, isFavorite, generateItinerary, replanItinerary, activityLabel,
             generationSecondsLeft, generationError,
-            removeDay, startEdit, saveEdit, cancelEdit
+            removeDay, startEdit, saveEdit, cancelEdit, shareItinerary, downloadItinerary
         };
         }
     }).mount('#app');

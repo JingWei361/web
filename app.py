@@ -234,8 +234,11 @@ def explore():
 
 @app.route("/favorites")
 def favorites():
-
     current_user = session.get('user')
+    if not current_user:
+        flash('請先登入才能使用我的收藏。', 'warning')
+        return redirect(url_for('login'))
+
     current_name = session.get('name')
     current_gender = session.get('gender')
     return render_template("favorites.html",
@@ -931,7 +934,8 @@ def login():
 
             # [新增] 登入成功時，把 user_metadata 裡面的姓名與性別存入 Session
             user_meta = res.user.user_metadata or {}
-            session['name'] = user_meta.get('full_name', res.user.email) # 若無姓名則顯示 email 作為備用
+            display_name = str(user_meta.get('full_name') or '').strip()
+            session['name'] = display_name or res.user.email # 若無姓名則顯示 email 作為備用
             session['gender'] = user_meta.get('gender')
 
             # 顯示歡迎訊息並重定向到首頁
@@ -959,15 +963,9 @@ def logout():
         # 記錄登出錯誤，但不影響用戶體驗
         print(f"Supabase 登出錯誤: {e}")
 
-    # 清除 session 中的用戶資訊
-    session.pop('user', None)
-    session.pop('user_id', None)
-    session.pop('access_token', None)
-    session.pop('refresh_token', None)
-    session.pop('name', None)    # [新增] 清除姓名
-    session.pop('gender', None)  # [新增] 清除性別
+    # 清除所有登入資訊，避免空姓名或舊的 flash 訊息殘留。
+    session.clear()
     # 顯示登出訊息並重定向到首頁
-    flash('您已成功登出', 'info')
     return redirect(url_for('home'))
 
 

@@ -27,7 +27,7 @@
                 <a href="/login" class="hover:text-blue-600">登入</a>
                 <a href="/register" class="hover:text-blue-600">註冊</a>
                 {% else %}
-                <span>歡迎, {{ name }}</span>
+                <span>歡迎, {{ name or user }}</span>
                 <a href="/logout" class="hover:text-blue-600">登出</a>
                 {% endif %}
             </div>

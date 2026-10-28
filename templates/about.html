@@ -26,7 +26,7 @@
                 <a href="/login" class="hover:text-blue-600">登入</a>
                 <a href="/register" class="hover:text-blue-600">註冊</a>
                 {% else %}
-                <span>歡迎, {{ name }}</span>
+                <span>歡迎, {{ name or user }}</span>
                 <a href="/logout" class="hover:text-blue-600">登出</a>
                 {% endif %}
             </div>
@@ -52,6 +52,40 @@
                 <h4 class="font-bold">組員</h4>
                 <p class="text-slate-400 text-xs mt-2">負責：卓靖螢</p>
             </div>
+        </div>
+
+        <div class="mt-12 rounded-2xl bg-white p-8 text-left shadow-sm border border-slate-100">
+            <h3 class="text-2xl font-bold mb-5">聯絡我們</h3>
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-4 text-slate-600">
+                <p><strong class="text-slate-800">負責人：</strong>陳璟葳</p>
+                <p><strong class="text-slate-800">電子信箱：pei711861@gmail.com</strong></p>
+                <p><strong class="text-slate-800">服務時間：</strong>週一至週五 09:00–18:00</p>
+            </div>
+        </div>
+
+        <div class="mt-12 text-left">
+            <h3 class="text-2xl font-bold mb-5">常見問題 FAQ</h3>
+            <div class="space-y-3">
+                <details class="rounded-2xl bg-white p-5 shadow-sm border border-slate-100">
+                    <summary class="cursor-pointer font-bold">AI 生成的行程可以修改嗎？</summary>
+                    <p class="mt-3 text-sm leading-relaxed text-slate-600">可以。生成行程後，使用每一天旁的「編輯」按鈕即可調整標題與活動，也能刪除不需要的行程日。
+                    </p>
+                </details>
+                <details class="rounded-2xl bg-white p-5 shadow-sm border border-slate-100">
+                    <summary class="cursor-pointer font-bold">如何分享或保存行程？</summary>
+                    <p class="mt-3 text-sm leading-relaxed text-slate-600">在行程結果或收藏的行程中，點擊「分享」可使用裝置分享功能，點擊「下載」則可保存為文字檔。
+                    </p>
+                </details>
+                <details class="rounded-2xl bg-white p-5 shadow-sm border border-slate-100">
+                    <summary class="cursor-pointer font-bold">AI 行程內容是否完全準確？</summary>
+                    <p class="mt-3 text-sm leading-relaxed text-slate-600">AI 建議僅供規劃參考。出發前請再次確認景點開放時間、交通狀況、票價與天氣資訊。</p>
+                </details>
+                <details class="rounded-2xl bg-white p-5 shadow-sm border border-slate-100">
+                    <summary class="cursor-pointer font-bold">遇到問題要怎麼回報？</summary>
+                    <p class="mt-3 text-sm leading-relaxed text-slate-600">請透過上方電子信箱提供問題描述、發生時間與必要的畫面資訊，我們會盡快協助處理。</p>
+                </details>
+            </div>
+        </div>
     </section>
 
 </body>
