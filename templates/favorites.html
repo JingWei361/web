@@ -39,9 +39,8 @@
                 <h2 class="text-3xl font-bold">我的收藏 (<span v-text="favorites.length">0</span>)</h2>
                 {% raw %}
                 <div class="flex flex-wrap gap-1 rounded-xl border border-slate-100 bg-white p-1 shadow-sm">
-                    <button v-for="category in categories" :key="category.id"
-                        @click="activeCategory = category.id" type="button"
-                        :class="['rounded-lg px-4 py-2 text-sm font-bold transition',
+                    <button v-for="category in categories" :key="category.id" @click="activeCategory = category.id"
+                        type="button" :class="['rounded-lg px-4 py-2 text-sm font-bold transition',
                             activeCategory === category.id
                                 ? 'bg-blue-600 text-white shadow-md'
                                 : 'text-slate-500 hover:bg-slate-50']">
@@ -80,7 +79,8 @@
                     <p v-if="uploadError" class="mt-3 text-sm text-red-500">{{ uploadError }}</p>
                 </div>
                 <div v-if="filteredUploadedFiles.length" class="mt-4 space-y-3">
-                    <article v-for="file in filteredUploadedFiles" :key="file.id" class="rounded-2xl bg-white p-4 shadow-sm">
+                    <article v-for="file in filteredUploadedFiles" :key="file.id"
+                        class="rounded-2xl bg-white p-4 shadow-sm">
                         <div class="flex items-start gap-3">
                             <div class="text-2xl">📄</div>
                             <div class="min-w-0 flex-1">
@@ -150,7 +150,7 @@
                                 展開詳情
                             </button>
                             <button @click="shareGeneration(item)" type="button"
-                                class="text-sm font-bold text-blue-600 hover:text-blue-800 px-2">分享</button>
+                                class="text-sm font-bold text-blue-600 hover:text-blue-800 px-2">複製</button>
                             <button @click="downloadGeneration(item)" type="button"
                                 class="text-sm font-bold text-blue-600 hover:text-blue-800 px-2">下載</button>
                             <button @click.stop="requestDelete('generation', item)"
@@ -230,7 +230,7 @@
                         <p v-else class="text-sm text-slate-500">這筆行程沒有可顯示的詳細內容。</p>
                         <div class="flex gap-3 border-t border-slate-100 pt-4">
                             <button @click="shareGeneration(selectedGeneration)" type="button"
-                                class="rounded-xl bg-blue-600 px-4 py-2 text-sm font-bold text-white hover:bg-blue-700">分享行程</button>
+                                class="rounded-xl bg-blue-600 px-4 py-2 text-sm font-bold text-white hover:bg-blue-700">複製行程</button>
                             <button @click="downloadGeneration(selectedGeneration)" type="button"
                                 class="rounded-xl border border-slate-200 px-4 py-2 text-sm font-bold text-slate-700 hover:bg-slate-50">下載行程</button>
                         </div>
@@ -253,6 +253,34 @@
                     </div>
                 </div>
             </div>
+
+            <div v-if="downloadTarget" class="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 px-4"
+                @click.self="cancelDownload">
+                <div class="w-full max-w-md rounded-2xl bg-white p-6 shadow-2xl">
+                    <div class="flex items-center justify-between">
+                        <h3 class="text-xl font-bold">下載行程</h3>
+                        <button @click="cancelDownload" type="button"
+                            class="text-2xl text-slate-400 hover:text-slate-700" aria-label="關閉下載格式選擇">&times;</button>
+                    </div>
+                    <p class="mt-3 text-slate-600">請選擇檔案類型：</p>
+                    <div class="mt-5 grid gap-3 sm:grid-cols-2">
+                        <button @click="downloadAsText" type="button"
+                            class="rounded-xl border border-slate-200 px-4 py-4 text-left transition hover:border-blue-500 hover:bg-blue-50">
+                            <span class="block font-bold text-slate-800">文字檔（TXT）</span>
+                            <span class="mt-1 block text-xs text-slate-500">適合編輯與複製內容</span>
+                        </button>
+                        <button @click="downloadAsPdf" type="button"
+                            class="rounded-xl border border-slate-200 px-4 py-4 text-left transition hover:border-blue-500 hover:bg-blue-50">
+                            <span class="block font-bold text-slate-800">PDF 檔</span>
+                            <span class="mt-1 block text-xs text-slate-500">開啟列印視窗後選擇另存為 PDF</span>
+                        </button>
+                    </div>
+                    <div class="mt-5 flex justify-end">
+                        <button @click="cancelDownload" type="button"
+                            class="rounded-xl border border-slate-200 px-4 py-2 font-bold text-slate-600 hover:bg-slate-50">取消</button>
+                    </div>
+                </div>
+            </div>
     </div>
     {% endraw %}
     </section>
@@ -271,6 +299,7 @@
         const uploadTitle = Vue.ref('');
         const selectedUploadDetails = Vue.ref(null);
         const deleteTarget = Vue.ref(null);
+        const downloadTarget = Vue.ref(null);
         const isDeleting = Vue.ref(false);
         const isUploading = Vue.ref(false);
         const uploadError = Vue.ref('');
@@ -431,12 +460,46 @@
             return lines.join('\n');
         };
         const downloadGeneration = (item) => {
+            downloadTarget.value = item;
+        };
+        const cancelDownload = () => {
+            downloadTarget.value = null;
+        };
+        const downloadAsText = () => {
+            const item = downloadTarget.value;
+            if (!item) return;
             const blob = new Blob([generationText(item)], { type: 'text/plain;charset=utf-8' });
             const link = document.createElement('a');
             link.href = URL.createObjectURL(blob);
             link.download = `${item.record.title || 'AI-旅遊行程'}.txt`;
             link.click();
             URL.revokeObjectURL(link.href);
+            cancelDownload();
+        };
+        const downloadAsPdf = async () => {
+            const item = downloadTarget.value;
+            if (!item) return;
+            const title = item.record.title || 'AI-旅遊行程';
+            try {
+                const response = await fetch('/api/generation-pdf', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ title, text: generationText(item) })
+                });
+                if (!response.ok) {
+                    const data = await response.json().catch(() => ({}));
+                    throw new Error(data.error || 'PDF 產生失敗。');
+                }
+                const blob = await response.blob();
+                const link = document.createElement('a');
+                link.href = URL.createObjectURL(blob);
+                link.download = `${title}.pdf`;
+                link.click();
+                URL.revokeObjectURL(link.href);
+                cancelDownload();
+            } catch (error) {
+                alert(error.message || 'PDF 下載失敗，請稍後再試。');
+            }
         };
         const shareGeneration = async (item) => {
             const text = generationText(item);
@@ -462,7 +525,7 @@
                 if (!copied) throw new Error('COPY_NOT_SUPPORTED');
                 alert('行程內容已複製，可以貼上分享給朋友。');
             } catch (error) {
-                if (error.name !== 'AbortError') alert('分享失敗，請稍後再試。');
+                if (error.name !== 'AbortError') alert('複製失敗，請稍後再試。');
             }
         };
         const selectGeneration = (item) => {
@@ -496,7 +559,7 @@
                 generationFavorites.value = data.favorites || [];
             }
         });
-        return { categories, activeCategory, favorites, generationFavorites, filteredFavorites, filteredGenerationFavorites, uploadedFiles, filteredUploadedFiles, selectedUploadFile, uploadTitle, isUploading, uploadError, selectedUploadDetails, deleteTarget, deleteTargetLabel, isDeleting, searchInput, searchQuery, runSearch, selectUploadFile, uploadFile, toggleUploadDetails, requestDelete, cancelDelete, confirmDelete, closeDetails, selectedSpot, selectedGeneration, getItinerary, selectSpot, selectGeneration, shareGeneration, downloadGeneration };
+        return { categories, activeCategory, favorites, generationFavorites, filteredFavorites, filteredGenerationFavorites, uploadedFiles, filteredUploadedFiles, selectedUploadFile, uploadTitle, isUploading, uploadError, selectedUploadDetails, deleteTarget, deleteTargetLabel, isDeleting, downloadTarget, searchInput, searchQuery, runSearch, selectUploadFile, uploadFile, toggleUploadDetails, requestDelete, cancelDelete, confirmDelete, cancelDownload, downloadAsText, downloadAsPdf, closeDetails, selectedSpot, selectedGeneration, getItinerary, selectSpot, selectGeneration, shareGeneration, downloadGeneration };
         }
         }).mount('#app');
     </script>

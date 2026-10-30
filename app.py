@@ -9,7 +9,7 @@ from urllib.parse import quote
 from uuid import uuid4
 
 from dotenv import load_dotenv
-from flask import Flask, flash, jsonify, redirect, render_template, request, session, url_for
+from flask import Flask, flash, jsonify, redirect, render_template, request, send_file, session, url_for
 from flask_cors import CORS
 from google import genai
 from google.genai import types
@@ -17,6 +17,12 @@ from supabase import create_client, Client
 from werkzeug.utils import secure_filename
 from docx import Document
 from pypdf import PdfReader
+from reportlab.lib.pagesizes import A4
+from reportlab.lib.styles import getSampleStyleSheet
+from reportlab.pdfbase import pdfmetrics
+from reportlab.pdfbase.cidfonts import UnicodeCIDFont
+from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer
+from xml.sax.saxutils import escape
 
 
 load_dotenv()
@@ -40,8 +46,10 @@ spots = [
 # Supabase 設定
 # ==========================================
 
-SUPABASE_URL = "https://keiyqvrdiogknmmghzgq.supabase.co"
-SUPABASE_KEY = "sb_publishable_tTq7TudmepTnN1oqQxEv1g__2pjRfFN"
+SUPABASE_URL = os.getenv("SUPABASE_URL")
+SUPABASE_KEY = os.getenv("SUPABASE_KEY")
+if not SUPABASE_URL or not SUPABASE_KEY:
+    raise RuntimeError("SUPABASE_URL and SUPABASE_KEY must be configured.")
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 
@@ -650,6 +658,42 @@ def get_generation_favorites():
         })
     except Exception as error:
         return jsonify({'error': f'讀取行程收藏失敗：{error}'}), 500
+
+
+@app.post('/api/generation-pdf')
+def create_generation_pdf():
+    user_client, user_id, error = authentication_required()
+    if error:
+        return error
+    data = request.get_json(silent=True) or {}
+    title = str(data.get('title') or 'AI-旅遊行程').strip()
+    text = str(data.get('text') or '').strip()
+    if not text:
+        return jsonify({'error': '缺少有效的行程內容。'}), 400
+
+    try:
+        pdfmetrics.registerFont(UnicodeCIDFont('STSong-Light'))
+        buffer = BytesIO()
+        document = SimpleDocTemplate(
+            buffer, pagesize=A4, rightMargin=50, leftMargin=50,
+            topMargin=50, bottomMargin=50
+        )
+        styles = getSampleStyleSheet()
+        style = styles['BodyText'].clone('itinerary')
+        style.fontName = 'STSong-Light'
+        style.fontSize = 11
+        style.leading = 18
+        story = [Paragraph(escape(title), style), Spacer(1, 16)]
+        for line in text.splitlines():
+            story.append(Paragraph(escape(line) or '&nbsp;', style))
+        document.build(story)
+        buffer.seek(0)
+        return send_file(
+            buffer, mimetype='application/pdf', as_attachment=True,
+            download_name=f'{title}.pdf'
+        )
+    except Exception as error:
+        return jsonify({'error': f'產生 PDF 失敗：{error}'}), 500
 
 
 @app.post('/api/generation-favorites')

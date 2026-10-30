@@ -7,3 +7,4 @@ python-dotenv
 flask-cors
 python-docx
 pypdf
+reportlab
