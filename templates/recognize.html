@@ -128,7 +128,8 @@
             emoji: '📍',
             desc: result.value?.description || 'AI 圖片辨識結果',
             tag: '圖片辨識',
-            source: 'recognize'
+            source: 'recognize',
+            isRecognitionResult: true
         }));
 
         const onFileChange = (e) => {
@@ -209,7 +210,9 @@
                         emoji: spot.emoji,
                         desc: spot.desc || spot.reason,
                         tag: spot.tag || '辨識推薦',
-                        source: spot.source || 'recognize'
+                        source: spot.source || 'similar',
+                        isRecognitionResult: Boolean(spot.isRecognitionResult),
+                        ...(spot.isRecognitionResult ? { recognitionImage: imagePreview.value } : {})
                     })
                 });
             const data = await response.json();

@@ -1,0 +1,23 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+
+<head>
+    <meta charset="UTF-8">
+    <meta http-equiv="refresh" content="2;url={{ home_url }}">
+    <title>登出中 - AI 旅遊助手</title>
+</head>
+
+<body>
+    <p>正在清除本機資料並登出...</p>
+    <script>
+        ['my_travel_itinerary_', 'my_travel_explore_', 'my_travel_recognize_']
+            .forEach(prefix => {
+                Object.keys(localStorage)
+                    .filter(key => key.startsWith(prefix))
+                    .forEach(key => localStorage.removeItem(key));
+            });
+        window.location.replace({{ home_url | tojson }});
+    </script>
+</body>
+
+</html>

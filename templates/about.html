@@ -61,6 +61,32 @@
                 <p><strong class="text-slate-800">電子信箱：pei711861@gmail.com</strong></p>
                 <p><strong class="text-slate-800">服務時間：</strong>週一至週五 09:00–18:00</p>
             </div>
+            {% if user %}
+            <div class="mt-8 text-center">
+                <button id="show-contact-form" type="button"
+                    class="rounded-xl bg-blue-600 px-6 py-3 font-bold text-white transition hover:bg-blue-700">
+                    填寫聯絡表單
+                </button>
+            </div>
+            <div id="contact-form-container" class="mt-8 hidden overflow-hidden rounded-xl border border-slate-100">
+                <iframe
+                    src="https://docs.google.com/forms/d/e/1FAIpQLSfBw4VvGz7C7glUd97y8IUkuZgVqlFOTrPnMpGpCv9goH11vA/viewform?embedded=true"
+                    title="聯絡我們表單" width="640" height="1096" frameborder="0" marginheight="0"
+                    marginwidth="0" class="block w-full">載入中…</iframe>
+            </div>
+            <script>
+                document.getElementById('show-contact-form').addEventListener('click', function () {
+                    document.getElementById('contact-form-container').classList.remove('hidden');
+                    this.classList.add('hidden');
+                });
+            </script>
+            {% else %}
+            <p class="mt-8 text-center text-sm text-slate-500">
+                請先
+                <a href="{{ url_for('login') }}" class="font-bold text-blue-600 hover:text-blue-700">登入</a>
+                後，再點擊按鈕填寫聯絡表單。
+            </p>
+            {% endif %}
         </div>
 
         <div class="mt-12 text-left">

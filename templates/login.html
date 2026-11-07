@@ -62,6 +62,16 @@
                     登入
                 </button>
             </form>
+            <div class="flex items-center gap-3 my-5 text-sm text-slate-400">
+                <span class="h-px flex-1 bg-slate-200"></span>
+                <span>或</span>
+                <span class="h-px flex-1 bg-slate-200"></span>
+            </div>
+            <a href="{{ url_for('google_login') }}"
+                class="w-full border border-slate-200 text-slate-700 py-3 rounded-xl font-bold hover:bg-slate-50 transition flex items-center justify-center gap-2">
+                <span class="text-lg font-semibold">G</span>
+                使用 Google 登入
+            </a>
             <p class="text-center mt-4 text-sm text-slate-500">
                 還沒有帳號？ <a href="/register" class="text-blue-600">註冊</a>
             </p>

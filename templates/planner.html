@@ -106,6 +106,14 @@
                     </div>
                 </div>
 
+                <div class="mb-6">
+                    <label class="block text-sm font-medium text-slate-600 mb-1">旅遊條件／特殊需求</label>
+                    <textarea v-model="form.conditions" rows="3" maxlength="1000"
+                        placeholder="例如：帶 6 歲小孩、需要無障礙路線、每天不要走超過 10,000 步、想吃素食、避開排隊景點..."
+                        class="w-full border border-slate-200 rounded-xl px-4 py-2 focus:ring-2 focus:ring-blue-500 outline-none resize-y"></textarea>
+                    <p class="text-xs text-slate-400 mt-1">AI 會依照這些條件調整景點、順序、交通與行程節奏。</p>
+                </div>
+
                 <button @click="generateItinerary" :disabled="isGenerating"
                     class="w-full bg-slate-900 text-white py-3 rounded-xl font-bold hover:bg-slate-800 transition disabled:bg-slate-300">
                     {% raw %}{{ isGenerating ? 'AI 正在計算中...' : '生成行程' }}{% endraw %}
@@ -133,6 +141,10 @@
                                 class="text-sm font-bold text-blue-600 hover:text-blue-800">分享</button>
                             <button @click="downloadItinerary" type="button"
                                 class="text-sm font-bold text-blue-600 hover:text-blue-800">下載</button>
+                            <button @click="regenerateEditedItinerary" :disabled="isRegenerating" type="button"
+                                class="text-sm font-bold text-emerald-600 hover:text-emerald-700 disabled:cursor-not-allowed disabled:opacity-50">
+                                {{ isRegenerating ? 'AI 重新生成中...' : '依編輯內容重新生成' }}
+                            </button>
                             <span class="text-sm text-slate-500">可刪除不需要的行程日</span>
                         </div>
                     </div>
@@ -143,6 +155,8 @@
                             <div v-if="editingIndex !== index" class="flex-1">
                                 <p class="font-semibold">{{ day.title }}</p>
                                 <p class="text-xs text-blue-500 mb-1">{{ day.date || '日期未設定' }}</p>
+                                <a :href="day.mapsUrl || itineraryMapsUrl(day)" target="_blank" rel="noopener"
+                                    class="inline-block text-xs font-bold text-blue-600 hover:text-blue-800">🗺️ 依序導航</a>
                                 <p v-if="day.description" class="text-sm text-slate-600 mt-2">{{ day.description }}</p>
                                 <div class="mt-3 space-y-2">
                                     <div v-for="(activity, activityIndex) in (day.activities || [])"
@@ -157,6 +171,9 @@
                                             </span>
                                             <span v-if="activity.time" class="text-xs text-slate-500">{{ activity.time
                                                 }}</span>
+                                            <a :href="activity.mapsUrl || activityMapsUrl(activity)" target="_blank"
+                                                rel="noopener"
+                                                class="text-xs font-bold text-blue-600 hover:text-blue-800">導航</a>
                                         </div>
                                         <p v-if="activity.address" class="text-xs text-slate-500 mt-1">{{
                                             activity.address }}</p>
@@ -278,6 +295,7 @@
         const insights = Vue.ref(null);
         const favorites = Vue.ref([]);
         const isReplanning = Vue.ref(false);
+        const isRegenerating = Vue.ref(false);
         const changeReason = Vue.ref('下雨');
         const targetDay = Vue.ref(1);
         const replanMessage = Vue.ref('');
@@ -288,6 +306,27 @@
         const activityLabel = (activity) => typeof activity === 'string'
             ? activity
             : (activity.name || activity.place || '未命名行程');
+        const activityPlace = (activity) => typeof activity === 'string'
+            ? activity
+            : (activity?.address || activity?.place || activity?.name || '');
+        const activityMapsUrl = (activity) => {
+            const query = [activityPlace(activity), form.city].filter(Boolean).join(', ');
+            return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(query)}`;
+        };
+        const itineraryMapsUrl = (day) => {
+            const destinations = (day.activities || [])
+                .map(activity => [activityPlace(activity), form.city].filter(Boolean).join(', '))
+                .filter(Boolean);
+            if (!destinations.length) return activityMapsUrl(day.title || '');
+            const params = new URLSearchParams({
+                api: '1',
+                origin: destinations[0],
+                destination: destinations[destinations.length - 1],
+                travelmode: 'transit'
+            });
+            if (destinations.length > 2) params.set('waypoints', destinations.slice(1, -1).join('|'));
+            return `https://www.google.com/maps/dir/?${params.toString()}`;
+        };
         const itineraryText = () => {
             const lines = [`${form.city || 'AI'} 旅遊行程`, ''];
             (itinerary.value || []).forEach(day => {
@@ -349,7 +388,8 @@
             days: 1,
             startDate: today,
             budget: '',
-            style: 'balanced'
+            style: 'balanced',
+            conditions: ''
         });
 
         const generateItinerary = async () => {
@@ -379,7 +419,8 @@
                         days: form.days,
                         startDate: form.startDate,
                         budget: form.budget,
-                        style: form.style
+                        style: form.style,
+                        conditions: form.conditions
                     })
                 }).then(async response => ({
                     response,
@@ -397,6 +438,7 @@
                 const { response, data } = await Promise.race([requestPromise, timeoutPromise]);
                 if (response.ok) {
                     itinerary.value = data.itinerary;
+                    insights.value = data.insights || null;
                     if (itinerary.value.length) targetDay.value = itinerary.value[0].day;
                     saveItinerary();
                     isGenerating.value = false;
@@ -406,7 +448,9 @@
                             generationRecordId.value = record ? record.id : null;
                         })
                         .catch(error => console.error('儲存行程紀錄失敗:', error));
-                    loadInsights().catch(error => console.error('載入旅遊資訊失敗:', error));
+                    if (!insights.value) {
+                        loadInsights().catch(error => console.error('載入旅遊資訊失敗:', error));
+                    }
                 } else {
                     alert(data.error || '生成失敗');
                 }
@@ -429,7 +473,13 @@
             const response = await fetch('/api/trip_insights', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ city: form.city, days: form.days, startDate: form.startDate, budget: form.budget })
+                body: JSON.stringify({
+                    city: form.city,
+                    days: form.days,
+                    startDate: form.startDate,
+                    budget: form.budget,
+                    conditions: form.conditions
+                })
             });
             const data = await response.json();
             if (response.ok) {
@@ -449,6 +499,7 @@
                     startDate: form.startDate,
                     budget: form.budget,
                     style: form.style,
+                    conditions: form.conditions,
                     itinerary: itinerary.value
                 })
             });
@@ -502,18 +553,62 @@
                         city: form.city,
                         targetDay: targetDay.value,
                         reason: changeReason.value,
+                        conditions: form.conditions,
                         itinerary: itinerary.value
                     })
                 });
                 const data = await response.json();
                 if (!response.ok) throw new Error(data.error || '重新安排失敗');
                 itinerary.value = data.itinerary;
+                await loadInsights();
                 saveItinerary();
                 replanMessage.value = data.message;
             } catch (error) {
                 replanMessage.value = error.message;
             } finally {
                 isReplanning.value = false;
+            }
+        };
+
+        const regenerateEditedItinerary = async () => {
+            if (!itinerary.value?.length || isRegenerating.value) return;
+            isRegenerating.value = true;
+            generationError.value = '';
+            replanMessage.value = '';
+            try {
+                const response = await fetch('/api/regenerate_itinerary', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        city: form.city,
+                        days: form.days,
+                        startDate: form.startDate,
+                        budget: form.budget,
+                        style: form.style,
+                        conditions: form.conditions,
+                        itinerary: itinerary.value
+                    })
+                });
+                const data = await response.json().catch(() => ({}));
+                if (!response.ok) throw new Error(data.error || 'AI 重新生成失敗');
+                itinerary.value = data.itinerary;
+                insights.value = data.insights || null;
+                if (Number.isInteger(data.days)) form.days = data.days;
+                targetDay.value = itinerary.value[0]?.day || 1;
+                isItineraryFavorite.value = false;
+                generationRecordId.value = null;
+                saveItinerary();
+                await Promise.all([
+                    loadInsights(),
+                    saveGenerationRecord().then(record => {
+                        generationRecordId.value = record ? record.id : null;
+                    })
+                ]);
+                replanMessage.value = '已根據編輯後的行程重新生成。';
+            } catch (error) {
+                generationError.value = error.message || 'AI 重新生成失敗，請稍後再試。';
+            } finally {
+                isRegenerating.value = false;
             }
         };
 
@@ -531,7 +626,8 @@
                     days: form.days,
                     startDate: form.startDate,
                     budget: form.budget,
-                    style: form.style
+                    style: form.style,
+                    conditions: form.conditions
                 },
                 insights: insights.value
             }));
@@ -594,12 +690,17 @@
                                 startDate: typeof savedState.form.startDate === 'string'
                                     ? savedState.form.startDate
                                     : form.startDate,
-                                budget: typeof savedState.form.budget === 'string'
+                                budget: (typeof savedState.form.budget === 'string'
+                                    || (typeof savedState.form.budget === 'number'
+                                        && Number.isFinite(savedState.form.budget)))
                                     ? savedState.form.budget
                                     : form.budget,
                                 style: typeof savedState.form.style === 'string'
                                     ? savedState.form.style
-                                    : form.style
+                                    : form.style,
+                                conditions: typeof savedState.form.conditions === 'string'
+                                    ? savedState.form.conditions
+                                    : form.conditions
                             });
                         }
                         if (savedState.insights && typeof savedState.insights === 'object') {
@@ -617,7 +718,7 @@
 
         return {
             form, today, isGenerating, itinerary, insights, isReplanning, targetDay, changeReason, replanMessage,
-            editingIndex, editDraft, isItineraryFavorite, toggleItineraryFavorite, toggleFavorite, isFavorite, generateItinerary, replanItinerary, activityLabel,
+            editingIndex, editDraft, isItineraryFavorite, toggleItineraryFavorite, toggleFavorite, isFavorite, generateItinerary, replanItinerary, regenerateEditedItinerary, isRegenerating, activityLabel, activityMapsUrl, itineraryMapsUrl,
             generationSecondsLeft, generationError,
             removeDay, startEdit, saveEdit, cancelEdit, shareItinerary, downloadItinerary
         };

@@ -119,6 +119,8 @@
                                 :aria-expanded="selectedSpot === spot">
                                 查看介紹
                             </button>
+                            <a :href="spot.mapsUrl || mapsUrl(spot.name)" target="_blank" rel="noopener"
+                                class="text-sm font-bold text-blue-600 hover:text-blue-800 px-2">🗺️ 導航</a>
                             <button @click="requestDelete('spot', spot)"
                                 class="text-slate-300 hover:text-red-500 px-2 text-xl" aria-label="取消景點收藏">🗑️</button>
                         </div>
@@ -182,6 +184,11 @@
                             class="max-h-[70vh] overflow-auto whitespace-pre-wrap rounded-xl bg-slate-50 p-4 text-sm leading-relaxed text-slate-600">{{ selectedUploadDetails.text }}</pre>
                     </div>
                     <div v-else-if="selectedSpot" class="pt-5">
+                        <img v-if="spotImage(selectedSpot)" :src="spotImage(selectedSpot)"
+                            :alt="`${selectedSpot.name} 照片`"
+                            class="mb-5 max-h-80 w-full rounded-2xl object-cover shadow-sm">
+                        <a :href="selectedSpot.mapsUrl || mapsUrl(selectedSpot.name)" target="_blank" rel="noopener"
+                            class="inline-block text-sm font-bold text-blue-600 hover:text-blue-800">🗺️ 導航到此處</a>
                         <p v-if="selectedSpot.desc" class="text-sm leading-relaxed text-slate-600">{{ selectedSpot.desc
                             }}</p>
                         <p v-else class="text-sm text-slate-500">這筆收藏沒有可顯示的介紹。</p>
@@ -199,7 +206,8 @@
                                 <div class="mb-2 flex flex-wrap items-center gap-x-3 gap-y-1">
                                     <p class="font-bold text-blue-600">第 {{ day.day }} 天</p>
                                     <p class="text-xs text-blue-500">{{ day.date || '日期未設定' }}</p>
-                                    <a v-if="day.mapsUrl" :href="day.mapsUrl" target="_blank" rel="noopener"
+                                    <a :href="day.mapsUrl || itineraryMapsUrl(day, selectedGeneration.record.context_data?.city)"
+                                        target="_blank" rel="noopener"
                                         class="text-xs font-bold text-blue-600 hover:text-blue-800">🗺️ 依序導航</a>
                                 </div>
                                 <p class="font-semibold">{{ day.title }}</p>
@@ -218,8 +226,8 @@
                                             activity.category }}</span>
                                         <span v-if="activity.time" class="ml-2 text-xs text-slate-500">{{ activity.time
                                             }}</span>
-                                        <a v-if="activity.mapsUrl" :href="activity.mapsUrl" target="_blank"
-                                            rel="noopener"
+                                        <a :href="activity.mapsUrl || activityMapsUrl(activity, selectedGeneration.record.context_data?.city)"
+                                            target="_blank" rel="noopener"
                                             class="float-right text-xs font-bold text-blue-600 hover:text-blue-800">導航</a>
                                         <p v-if="activity.address" class="mt-1 text-xs text-slate-500">{{
                                             activity.address }}</p>
@@ -440,6 +448,48 @@
                 return [];
             }
         };
+        const mapsUrl = (place, city = '') => {
+            const query = [place, city].filter(Boolean).join(', ');
+            return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(query)}`;
+        };
+        const storageScope = {{ (user or 'guest') | tojson }};
+        const recognitionStateKey = `my_travel_recognize_${storageScope}`;
+        const getRecognitionImage = () => {
+            try {
+                const savedState = JSON.parse(localStorage.getItem(recognitionStateKey) || '{}');
+                const result = savedState.result || {};
+                return savedState.imagePreview && result.landmarkName
+                    ? { name: String(result.landmarkName).trim().toLowerCase(), image: savedState.imagePreview }
+                    : null;
+            } catch (error) {
+                return null;
+            }
+        };
+        const spotImage = (spot) => {
+            if (spot.isRecognitionResult && spot.recognitionImage) return spot.recognitionImage;
+            const recognition = getRecognitionImage();
+            return recognition && spot.source === 'recognize'
+                && recognition.name === String(spot.name || '').trim().toLowerCase()
+                ? recognition.image
+                : spot.imageUrl || spot.image_url || '';
+        };
+        const activityPlace = (activity) => typeof activity === 'string'
+            ? activity
+            : (activity?.address || activity?.place || activity?.name || '');
+        const activityMapsUrl = (activity, city = '') => mapsUrl(activityPlace(activity), city);
+        const itineraryMapsUrl = (day, city = '') => {
+            const places = (day.activities || []).map(activity => activityPlace(activity)).filter(Boolean);
+            if (!places.length) return mapsUrl(day.title, city);
+            const destinations = places.map(place => [place, city].filter(Boolean).join(', '));
+            const params = new URLSearchParams({
+                api: '1',
+                origin: destinations[0],
+                destination: destinations[destinations.length - 1],
+                travelmode: 'transit'
+            });
+            if (destinations.length > 2) params.set('waypoints', destinations.slice(1, -1).join('|'));
+            return `https://www.google.com/maps/dir/?${params.toString()}`;
+        };
         const generationText = (item) => {
             const record = item.record || {};
             const context = record.context_data || {};
@@ -559,7 +609,7 @@
                 generationFavorites.value = data.favorites || [];
             }
         });
-        return { categories, activeCategory, favorites, generationFavorites, filteredFavorites, filteredGenerationFavorites, uploadedFiles, filteredUploadedFiles, selectedUploadFile, uploadTitle, isUploading, uploadError, selectedUploadDetails, deleteTarget, deleteTargetLabel, isDeleting, downloadTarget, searchInput, searchQuery, runSearch, selectUploadFile, uploadFile, toggleUploadDetails, requestDelete, cancelDelete, confirmDelete, cancelDownload, downloadAsText, downloadAsPdf, closeDetails, selectedSpot, selectedGeneration, getItinerary, selectSpot, selectGeneration, shareGeneration, downloadGeneration };
+        return { categories, activeCategory, favorites, generationFavorites, filteredFavorites, filteredGenerationFavorites, uploadedFiles, filteredUploadedFiles, selectedUploadFile, uploadTitle, isUploading, uploadError, selectedUploadDetails, deleteTarget, deleteTargetLabel, isDeleting, downloadTarget, searchInput, searchQuery, runSearch, selectUploadFile, uploadFile, toggleUploadDetails, requestDelete, cancelDelete, confirmDelete, cancelDownload, downloadAsText, downloadAsPdf, closeDetails, selectedSpot, selectedGeneration, getItinerary, mapsUrl, spotImage, activityMapsUrl, itineraryMapsUrl, selectSpot, selectGeneration, shareGeneration, downloadGeneration };
         }
         }).mount('#app');
     </script>

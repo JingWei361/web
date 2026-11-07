@@ -109,21 +109,14 @@ declare
   v_phone text;
   v_gender text;
 begin
-  v_full_name := nullif(trim(coalesce(new.raw_user_meta_data->>'full_name', '')), '');
-  v_phone := nullif(trim(coalesce(new.raw_user_meta_data->>'phone', '')), '');
-  v_gender := nullif(trim(coalesce(new.raw_user_meta_data->>'gender', '')), '');
-
-  if v_full_name is null then
-    raise exception 'full_name is required';
-  end if;
-
-  if v_phone is null then
-    raise exception 'phone is required';
-  end if;
-
-  if v_gender is null then
-    raise exception 'gender is required';
-  end if;
+  v_full_name := coalesce(
+    nullif(trim(coalesce(new.raw_user_meta_data->>'full_name', '')), ''),
+    nullif(trim(coalesce(new.raw_user_meta_data->>'name', '')), ''),
+    nullif(split_part(coalesce(new.email, ''), '@', 1), ''),
+    'Google user'
+  );
+  v_phone := coalesce(nullif(trim(coalesce(new.raw_user_meta_data->>'phone', '')), ''), '');
+  v_gender := coalesce(nullif(trim(coalesce(new.raw_user_meta_data->>'gender', '')), ''), 'other');
 
   insert into public.profiles (user_id, full_name, phone, email, gender)
   values (

@@ -33,6 +33,8 @@ CORS(app, resources={r"/api/*": {"origins": "*"}})
 
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.5-flash-lite")
 GEMINI_TIMEOUT_MS = int(os.getenv("GEMINI_TIMEOUT_MS", "60000"))
+EXPLORE_GEMINI_MODEL = os.getenv("EXPLORE_GEMINI_MODEL", "gemini-3.5-flash-lite")
+EXPLORE_GEMINI_TIMEOUT_MS = int(os.getenv("EXPLORE_GEMINI_TIMEOUT_MS", "60000"))
 UPLOAD_BUCKET = 'user-files'
 
 spots = [
@@ -40,6 +42,8 @@ spots = [
     {'name': '明治神宮', 'emoji': '⛩️', 'tag': '景點', 'category': 'attraction', 'desc': '東京市中心的森林神社。', 'rating': 4.7},
     {'name': '一蘭拉麵', 'emoji': '🍜', 'tag': '美食', 'category': 'food', 'desc': '豚骨拉麵的經典代表作。', 'rating': 4.5},
     {'name': '築地市場', 'emoji': '🍣', 'tag': '美食', 'category': 'food', 'desc': '新鮮海鮮與在地小吃集中地。', 'rating': 4.7},
+    {'name': '淺草豪景飯店', 'emoji': '🏨', 'tag': '住宿', 'category': 'hotel', 'desc': '適合探索淺草與市區的住宿選擇。', 'rating': 4.4},
+    {'name': '新宿格蘭貝爾飯店', 'emoji': '🏨', 'tag': '住宿', 'category': 'hotel', 'desc': '交通便利、適合城市旅行的住宿選擇。', 'rating': 4.3},
 ]
 
 # ==========================================
@@ -60,6 +64,16 @@ def get_gemini_client() -> genai.Client | None:
     return genai.Client(
         api_key=api_key,
         http_options=types.HttpOptions(timeout=GEMINI_TIMEOUT_MS),
+    )
+
+
+def get_explore_gemini_client() -> genai.Client | None:
+    api_key = os.getenv("EXPLORE_GEMINI_API_KEY")
+    if not api_key:
+        return None
+    return genai.Client(
+        api_key=api_key,
+        http_options=types.HttpOptions(timeout=EXPLORE_GEMINI_TIMEOUT_MS),
     )
 
 
@@ -89,6 +103,27 @@ def generate_gemini_json(prompt: str, contents: Any = None) -> Any:
     )
     if not response.text:
         raise ValueError("Gemini returned an empty response.")
+    return parse_gemini_json(response.text)
+
+
+def generate_explore_json(prompt: str) -> Any:
+    client = get_explore_gemini_client()
+    if client is None:
+        raise RuntimeError("EXPLORE_GEMINI_API_KEY is not configured.")
+    response = client.models.generate_content(
+        model=EXPLORE_GEMINI_MODEL,
+        contents=prompt,
+        config={
+            "system_instruction": (
+                "你是探索景點推薦助手。只回傳有效 JSON，不要 Markdown 或額外文字。"
+            ),
+            "response_mime_type": "application/json",
+            "temperature": 0.9,
+            "max_output_tokens": 4096,
+        },
+    )
+    if not response.text:
+        raise ValueError("Explore Gemini returned an empty response.")
     return parse_gemini_json(response.text)
 
 
@@ -200,11 +235,34 @@ def authentication_required() -> tuple[Any, Any, Any]:
         return None, None, (jsonify({'error': '請先登入才能使用此功能。'}), 401)
     return user_client, user_id, None
 
+
+def store_auth_session(auth_session: Any) -> None:
+    """Store Supabase's authenticated user and tokens in the Flask session."""
+    if not auth_session or not auth_session.user or not auth_session.session:
+        raise ValueError("Supabase returned an incomplete authentication session.")
+
+    user = auth_session.user
+    tokens = auth_session.session
+    user_meta = user.user_metadata or {}
+    display_name = str(user_meta.get('full_name') or user_meta.get('name') or '').strip()
+
+    session['user'] = user.email
+    session['user_id'] = user.id
+    session['access_token'] = tokens.access_token
+    session['refresh_token'] = tokens.refresh_token
+    session['name'] = display_name or user.email
+    session['gender'] = user_meta.get('gender')
+
+
 # ==========================================
 # 路由：首頁
 # ==========================================
 @app.route("/")
 def home():
+    # Supabase may use the configured Site URL and return the code to "/".
+    if request.args.get('code'):
+        return redirect(url_for('auth_callback', **request.args.to_dict(flat=True)))
+
     # 從 session 中獲取當前用戶的資訊
     current_user = session.get('user')
     current_name = session.get('name')
@@ -311,7 +369,10 @@ def generate_itinerary():
     city = str(data.get('city', '')).strip()
     start_date_text = str(data.get('startDate', '')).strip()
     style = str(data.get('style', 'balanced')).strip() or 'balanced'
+    conditions = str(data.get('conditions', '')).strip()
     budget = data.get('budget')
+    if len(conditions) > 1000:
+        return jsonify({'error': '旅遊條件不可超過 1000 個字。'}), 400
     try:
         days = max(1, min(14, int(data.get('days', 1))))
     except (TypeError, ValueError):
@@ -324,7 +385,10 @@ def generate_itinerary():
         return jsonify({'error': '出發日期格式不正確。'}), 400
 
     prompt = f"""
-規劃{city} {days}天旅行，日期從{start_date.strftime('%Y-%m-%d')}開始，風格：{style}。
+規劃{city} {days}天旅行，日期從{start_date.strftime('%Y-%m-%d')}開始，風格：{style}，預算：{budget or '未指定'} TWD。
+旅客的額外條件與特殊需求如下，必須優先遵守並反映在行程安排中：
+「{conditions or '無額外條件'}」
+如果條件與一般建議衝突，請以旅客條件為準；無法滿足時，請在當天 description 說明原因並提供替代方案。
 只回傳 JSON，不要解釋。每天至少安排 4 個活動，最多安排 6 個活動，按照時間排序。
 格式：{{"itinerary":[{{"day":1,"date":"YYYY-MM-DD","title":"短標題","description":"30字內摘要",
 "activities":[{{"time":"09:00","name":"明確景點或店名","place":"明確地點名稱","address":"簡短地址",
@@ -354,7 +418,11 @@ day 必須是 1 到 {days}，日期依序增加。category 只能是：食物、
             )
             for day_number, day_plan in enumerate(itinerary, start=1)
         ]
-        return jsonify({'itinerary': normalized_itinerary, 'source': 'gemini'})
+        return jsonify({
+            'itinerary': normalized_itinerary,
+            'insights': build_trip_insights(city, days, start_date, float(budget or 0), conditions),
+            'source': 'gemini',
+        })
     except RuntimeError:
         app.logger.error("GEMINI_API_KEY is not configured.")
         return jsonify({'error': 'Gemini API 尚未設定，請確認 GEMINI_API_KEY 環境變數。'}), 503
@@ -368,17 +436,32 @@ day 必須是 1 到 {days}，日期依序增加。category 只能是：食物、
 @app.route("/api/explore_spots")
 def get_explore_spots():
     category = request.args.get('category', 'all')
-    category_name = {'all': '景點與美食', 'attraction': '景點', 'food': '美食'}.get(category)
+    location = str(request.args.get('location', '')).strip()
+    condition = str(request.args.get('condition', '')).strip()
+    if len(location) > 200:
+        return jsonify({'error': '地點不可超過 200 個字。'}), 400
+    if len(condition) > 500:
+        return jsonify({'error': '推薦條件不可超過 500 個字。'}), 400
+    category_name = {
+        'all': '景點、美食與住宿',
+        'attraction': '景點',
+        'food': '美食',
+        'hotel': '住宿',
+    }.get(category)
     if category_name is None:
         return jsonify({'error': '無效的景點分類。'}), 400
 
     try:
-        result = generate_gemini_json(
+        result = generate_explore_json(
             f"""
-請隨機推薦 6 個適合旅客探索的{category_name}。
+請根據使用者條件，隨機推薦 6 個適合探索的{category_name}。
+使用者指定地點：「{location or '未指定地點'}」
+使用者推薦條件：「{condition or '未提供額外條件'}」
+目前選擇分類：「{category_name}」
+必須優先符合使用者指定地點、推薦條件與分類，推薦內容彼此不要重複；若指定地點，所有推薦都必須位於該地。
 每個推薦需包含真實且適合旅遊的名稱、emoji、tag、category、簡短 desc 與 1 到 5 的 rating。
-category 只能是 attraction 或 food。
-回傳 JSON：{{"spots":[{{"name":"名稱","emoji":"圖示","tag":"景點或美食","category":"attraction","desc":"介紹","rating":4.5}}]}}
+category 必須是 attraction、food 或 hotel，且要符合目前選擇分類。
+回傳 JSON：{{"spots":[{{"name":"名稱","emoji":"圖示","tag":"景點、美食或住宿","category":"{category if category != 'all' else 'attraction'}","desc":"介紹","rating":4.5}}]}}
 """
         )
         generated_spots = result.get('spots') if isinstance(result, dict) else None
@@ -624,6 +707,7 @@ def create_generation_record():
                 'startDate': data.get('startDate'),
                 'budget': data.get('budget'),
                 'style': data.get('style'),
+                'conditions': data.get('conditions'),
             },
             'model_name': 'demo-itinerary-generator',
             'request_payload': data,
@@ -766,6 +850,9 @@ def trip_insights():
     data = request.get_json(silent=True) or {}
     city = str(data.get('city', '')).strip()
     start_date_text = str(data.get('startDate', '')).strip()
+    conditions = str(data.get('conditions', '')).strip()
+    if len(conditions) > 1000:
+        return jsonify({'error': '旅遊條件不可超過 1000 個字。'}), 400
     try:
         days = max(1, min(30, int(data.get('days', 1))))
         budget = max(0, float(data.get('budget') or 0))
@@ -777,14 +864,27 @@ def trip_insights():
         start_date = datetime.strptime(start_date_text, '%Y-%m-%d') if start_date_text else datetime.now()
     except ValueError:
         return jsonify({'error': '出發日期格式不正確。'}), 400
+    return jsonify(build_trip_insights(city, days, start_date, budget, conditions))
 
+
+def build_trip_insights(
+    city: str,
+    days: int,
+    start_date: datetime,
+    budget: float,
+    conditions: str,
+) -> dict[str, Any]:
     hotel = round(budget * 0.35) if budget else days * 2200
     transport = round(budget * 0.12) if budget else days * 700
     food = round(budget * 0.25) if budget else days * 1000
     tickets = round(budget * 0.13) if budget else days * 500
     reserve = round(budget * 0.15) if budget else days * 600
     total = hotel + transport + food + tickets + reserve
-    return jsonify({
+    transport_summary = '建議使用大眾運輸，景點間平均約 25 分鐘。'
+    transport_tip = '尖峰時段請預留 15 分鐘轉乘緩衝。'
+    if conditions:
+        transport_tip = f'已依你的條件「{conditions[:120]}」保留交通安排彈性。'
+    return {
         'weather': [
             {
                 'day': day,
@@ -795,14 +895,14 @@ def trip_insights():
             }
             for day in range(1, days + 1)
         ],
-        'transport': {'summary': '建議使用大眾運輸，景點間平均約 25 分鐘。', 'estimatedCost': transport, 'tip': '尖峰時段請預留 15 分鐘轉乘緩衝。'},
+        'transport': {'summary': transport_summary, 'estimatedCost': transport, 'tip': transport_tip},
         'accommodation': {'area': f'{city} 車站周邊', 'nightlyBudget': round(hotel / days), 'reason': '靠近交通節點，適合首次造訪與每日往返。'},
         'budget': {
             'hotel': hotel, 'transport': transport, 'food': food, 'tickets': tickets, 'reserve': reserve, 'total': total,
             'withinBudget': not budget or total <= budget,
             'message': '預算配置可行，已保留 15% 預備金。' if not budget or total <= budget else '目前配置可能超出預算，建議降低住宿或購物支出。',
         },
-    })
+    }
 
 
 @app.post('/api/replan')
@@ -810,6 +910,7 @@ def replan():
     data = request.get_json(silent=True) or {}
     city = str(data.get('city', '')).strip()
     reason = str(data.get('reason', '臨時變更')).strip() or '臨時變更'
+    conditions = str(data.get('conditions', '')).strip()
     itinerary = data.get('itinerary')
     target_day = data.get('targetDay')
     try:
@@ -818,6 +919,8 @@ def replan():
         return jsonify({'error': '指定天數格式不正確。'}), 400
     if not city:
         return jsonify({'error': '請先輸入目的地。'}), 400
+    if len(conditions) > 1000:
+        return jsonify({'error': '旅遊條件不可超過 1000 個字。'}), 400
     if not isinstance(itinerary, list) or target_day is None:
         return jsonify({'error': '請選擇要調整的行程日期。'}), 400
 
@@ -829,6 +932,7 @@ def replan():
     try:
         result = generate_gemini_json(f"""
 請重新安排 {city} 第 {target_day} 天的旅程，原因是「{reason}」。
+同時必須遵守旅客原本設定的條件：「{conditions or '無額外條件'}」。
 原本行程：{json.dumps(target_plan, ensure_ascii=False)}
 只替換這一天，請提供至少 4 個、最多 6 個按照時間排序的明確地點或店名。
 回傳 JSON：{{"day":{target_day},"date":"{date_text}","title":"標題","description":"調整原因與建議",
@@ -864,6 +968,84 @@ category 只能使用：食物、活動、購物、景點、酒店、交通、�
         for index, day_plan in enumerate(updated_itinerary)
     ]
     return jsonify({'itinerary': updated_itinerary, 'message': f'已只調整第 {target_day} 天，其餘行程保持不變。'})
+
+
+@app.post('/api/regenerate_itinerary')
+def regenerate_itinerary():
+    data = request.get_json(silent=True) or {}
+    city = str(data.get('city', '')).strip()
+    start_date_text = str(data.get('startDate', '')).strip()
+    style = str(data.get('style', 'balanced')).strip() or 'balanced'
+    conditions = str(data.get('conditions', '')).strip()
+    itinerary = data.get('itinerary')
+    try:
+        days = max(1, min(14, int(data.get('days', len(itinerary or [])))))
+    except (TypeError, ValueError):
+        return jsonify({'error': '旅行天數格式不正確。'}), 400
+    if not city:
+        return jsonify({'error': '請先輸入目的地。'}), 400
+    if len(conditions) > 1000:
+        return jsonify({'error': '旅遊條件不可超過 1000 個字。'}), 400
+    if not isinstance(itinerary, list) or not itinerary:
+        return jsonify({'error': '請先編輯並保存至少一天的行程。'}), 400
+    days = min(days, len(itinerary))
+    try:
+        start_date = datetime.strptime(start_date_text, '%Y-%m-%d') if start_date_text else datetime.now()
+    except ValueError:
+        return jsonify({'error': '出發日期格式不正確。'}), 400
+
+    edited_itinerary = itinerary[:days]
+    try:
+        result = generate_gemini_json(f"""
+請根據旅客編輯後的行程，重新生成完整的 {city} {days} 天旅遊行程。
+出發日期：{start_date.strftime('%Y-%m-%d')}
+旅行風格：{style}；預算：{data.get('budget') or '未指定'} TWD。
+特殊條件：{conditions or '無額外條件'}。
+以下是旅客編輯後的原始行程，必須保留其中明確指定的景點、活動與偏好，並在此基礎上改善順序、交通與時間安排：
+{json.dumps(edited_itinerary, ensure_ascii=False)}
+每天安排 4 至 6 個明確且真實的地點或店名，依時間排序；不可使用「探索市區」等泛稱。
+回傳 JSON：{{"itinerary":[{{"day":1,"date":"YYYY-MM-DD","title":"短標題","description":"30字內摘要",
+"activities":[{{"time":"09:00","name":"明確景點或店名","place":"明確地點名稱","address":"簡短地址",
+"category":"景點","description":"20字內說明"}}]}}]}}
+day 必須是 1 到 {days}，日期依序增加。category 只能是：食物、活動、購物、景點、酒店、交通、其他。
+""")
+        generated = result.get('itinerary') if isinstance(result, dict) else None
+        if not isinstance(generated, list) or len(generated) != days:
+            raise ValueError("Gemini returned an invalid regenerated itinerary shape.")
+        if any(
+            not isinstance(day_plan, dict)
+            or not isinstance(day_plan.get('activities'), list)
+            or len(day_plan['activities']) < 4
+            for day_plan in generated
+        ):
+            raise ValueError("Gemini returned fewer than four activities for a day.")
+        normalized_itinerary = [
+            normalize_day(
+                day_plan,
+                city,
+                day_number,
+                (start_date + timedelta(days=day_number - 1)).strftime('%Y-%m-%d'),
+                include_maps=False,
+            )
+            for day_number, day_plan in enumerate(generated, start=1)
+        ]
+        return jsonify({
+            'itinerary': normalized_itinerary,
+            'insights': build_trip_insights(
+                city,
+                days,
+                start_date,
+                float(data.get('budget') or 0),
+                conditions,
+            ),
+            'days': days,
+        })
+    except RuntimeError:
+        app.logger.error("GEMINI_API_KEY is not configured for itinerary regeneration.")
+        return jsonify({'error': 'Gemini API 尚未設定，無法重新生成行程。'}), 503
+    except Exception:
+        app.logger.exception("Gemini edited itinerary regeneration failed.")
+        return jsonify({'error': 'AI 重新生成行程失敗，請稍後再試。'}), 502
 
 
 @app.post('/api/recognize_image')
@@ -961,8 +1143,8 @@ def register():
 def login():
     if request.method == 'POST':
         # 獲取表單中的信箱和密碼
-        email = request.form['email']
-        password = request.form['password']
+        email = request.form.get('email', '').strip()
+        password = request.form.get('password', '')
 
         try:
             # 使用 Supabase 進行密碼登入
@@ -971,16 +1153,7 @@ def login():
                 "password": password
             })
             # 將 Supabase 使用者與 session token 存入 Flask session，供 RLS API 使用
-            session['user'] = res.user.email
-            session['user_id'] = res.user.id
-            session['access_token'] = res.session.access_token
-            session['refresh_token'] = res.session.refresh_token
-
-            # [新增] 登入成功時，把 user_metadata 裡面的姓名與性別存入 Session
-            user_meta = res.user.user_metadata or {}
-            display_name = str(user_meta.get('full_name') or '').strip()
-            session['name'] = display_name or res.user.email # 若無姓名則顯示 email 作為備用
-            session['gender'] = user_meta.get('gender')
+            store_auth_session(res)
 
             # 顯示歡迎訊息並重定向到首頁
             flash(f'歡迎回來, {session["name"]}!', 'success')
@@ -998,6 +1171,48 @@ def login():
     # 對於 GET 請求，渲染登入頁面
     return render_template('login.html')
 
+
+@app.route('/auth/google')
+def google_login():
+    try:
+        redirect_url = url_for('auth_callback', _external=True)
+        res = supabase.auth.sign_in_with_oauth({
+            "provider": "google",
+            "options": {"redirect_to": redirect_url},
+        })
+        if not res or not res.url:
+            raise RuntimeError("Supabase did not return a Google OAuth URL.")
+        return redirect(res.url)
+    except Exception:
+        app.logger.exception("Google OAuth initialization failed.")
+        flash('Google 登入目前無法使用，請稍後再試。', 'danger')
+        return redirect(url_for('login'))
+
+
+@app.route('/auth/callback')
+def auth_callback():
+    error_description = request.args.get('error_description') or request.args.get('error')
+    if error_description:
+        app.logger.warning("Google OAuth callback returned an error: %s", error_description)
+        flash('Google 登入已取消或失敗，請稍後再試。', 'warning')
+        return redirect(url_for('login'))
+
+    code = request.args.get('code')
+    if not code:
+        flash('Google 登入回應無效，請重新嘗試。', 'danger')
+        return redirect(url_for('login'))
+
+    try:
+        res = supabase.auth.exchange_code_for_session({"auth_code": code})
+        store_auth_session(res)
+        flash(f'歡迎回來, {session["name"]}!', 'success')
+        return redirect(url_for('home'))
+    except Exception:
+        app.logger.exception("Google OAuth callback failed.")
+        flash('Google 登入失敗，請確認設定後再試。', 'danger')
+        return redirect(url_for('login'))
+
+
 @app.route('/logout')
 def logout():
     try:
@@ -1009,15 +1224,15 @@ def logout():
 
     # 清除所有登入資訊，避免空姓名或舊的 flash 訊息殘留。
     session.clear()
-    # 顯示登出訊息並重定向到首頁
-    return redirect(url_for('home'))
+    # 先由瀏覽器清除 localStorage，再返回首頁；伺服器無法直接清除瀏覽器資料。
+    return render_template('logout.html', home_url=url_for('home'))
 
 
 # ==========================================
 # 啟動區塊
 # ==========================================
 if __name__ == "__main__":
-    # Render 會提供 PORT 環境變數，若無則預設 5002
-    port = int(os.environ.get("PORT", 5002))
+    # Render 會提供 PORT 環境變數；本機預設使用 OAuth 常見的 3000 埠。
+    port = int(os.environ.get("PORT", 3000))
     # 生產環境中 debug 應設為 False，但在 Render 介面可透過環境變數控制
     app.run(host='0.0.0.0', port=port)
