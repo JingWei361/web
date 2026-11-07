@@ -124,7 +124,7 @@
             <div v-if="isGenerating || itinerary || insights || generationError" class="space-y-6">
                 <div v-if="isGenerating || generationError"
                     class="bg-white p-8 rounded-3xl shadow-md text-center text-slate-500">
-                    AI 正在整理行程，最多等待 {{ generationSecondsLeft }} 秒<span class="loading-dots"></span>
+                    AI 正在整理行程重新安排行程<span class="loading-dots"></span>
                     <p v-if="generationError" class="mt-4 text-sm font-semibold text-red-600">{{ generationError }}</p>
                 </div>
 
@@ -141,10 +141,6 @@
                                 class="text-sm font-bold text-blue-600 hover:text-blue-800">分享</button>
                             <button @click="downloadItinerary" type="button"
                                 class="text-sm font-bold text-blue-600 hover:text-blue-800">下載</button>
-                            <button @click="regenerateEditedItinerary" :disabled="isRegenerating" type="button"
-                                class="text-sm font-bold text-emerald-600 hover:text-emerald-700 disabled:cursor-not-allowed disabled:opacity-50">
-                                {{ isRegenerating ? 'AI 重新生成中...' : '依編輯內容重新生成' }}
-                            </button>
                             <span class="text-sm text-slate-500">可刪除不需要的行程日</span>
                         </div>
                     </div>
@@ -152,11 +148,12 @@
                         <article v-for="(day, index) in itinerary" :key="`${day.day}-${index}`"
                             class="border border-slate-100 rounded-2xl p-4 flex flex-col sm:flex-row sm:items-center gap-3">
                             <div class="min-w-20 font-bold text-blue-600">第 {{ day.day }} 天</div>
-                            <div v-if="editingIndex !== index" class="flex-1">
+                            <div class="flex-1">
                                 <p class="font-semibold">{{ day.title }}</p>
                                 <p class="text-xs text-blue-500 mb-1">{{ day.date || '日期未設定' }}</p>
                                 <a :href="day.mapsUrl || itineraryMapsUrl(day)" target="_blank" rel="noopener"
-                                    class="inline-block text-xs font-bold text-blue-600 hover:text-blue-800">🗺️ 依序導航</a>
+                                    class="inline-block text-xs font-bold text-blue-600 hover:text-blue-800">🗺️
+                                    依序導航</a>
                                 <p v-if="day.description" class="text-sm text-slate-600 mt-2">{{ day.description }}</p>
                                 <div class="mt-3 space-y-2">
                                     <div v-for="(activity, activityIndex) in (day.activities || [])"
@@ -182,26 +179,26 @@
                                     </div>
                                 </div>
                             </div>
-                            <div v-else class="flex-1 space-y-2">
-                                <input v-model="editDraft.title" type="text"
-                                    class="w-full border border-blue-200 rounded-lg px-3 py-2 outline-none focus:ring-2 focus:ring-blue-500">
-                                <textarea v-model="editDraft.activitiesText" rows="2"
-                                    class="w-full border border-blue-200 rounded-lg px-3 py-2 outline-none focus:ring-2 focus:ring-blue-500"
-                                    placeholder="每個活動用逗號分隔"></textarea>
-                            </div>
-                            <div v-if="editingIndex !== index" class="flex gap-3 self-start sm:self-auto">
-                                <button @click="startEdit(day, index)" type="button"
-                                    class="text-sm text-blue-600 hover:text-blue-800">編輯</button>
+                            <div class="flex gap-3 self-start sm:self-auto">
                                 <button @click="removeDay(index)" type="button"
                                     class="text-sm text-red-500 hover:text-red-700">刪除</button>
                             </div>
-                            <div v-else class="flex gap-3 self-start sm:self-auto">
-                                <button @click="saveEdit(index)" type="button"
-                                    class="text-sm text-green-600 hover:text-green-800">儲存</button>
-                                <button @click="cancelEdit" type="button"
-                                    class="text-sm text-slate-500 hover:text-slate-700">取消</button>
-                            </div>
                         </article>
+                    </div>
+                </div>
+
+                <div v-if="itinerary" class="bg-white p-8 rounded-3xl shadow-md">
+                    <h3 class="text-xl font-bold mb-2">修改行程</h3>
+                    <p class="text-sm text-slate-500 mb-4">告訴 AI 你想調整的內容，重新生成後會依照你的說明安排整份行程。</p>
+                    <textarea v-model="editInstruction" rows="4" maxlength="2000"
+                        placeholder="例如：把第二天改成親子景點，減少購物行程，每天晚上 8 點前回到住宿地點"
+                        class="w-full border border-slate-200 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-blue-500 resize-y"></textarea>
+                    <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mt-4">
+                        <p class="text-xs text-slate-400">請具體描述想修改的天數、景點、活動或行程安排。</p>
+                        <button @click="regenerateEditedItinerary" :disabled="isRegenerating" type="button"
+                            class="bg-emerald-600 text-white px-5 py-3 rounded-xl font-bold hover:bg-emerald-700 disabled:bg-slate-300 disabled:cursor-not-allowed">
+                            {{ isRegenerating ? 'AI 重新生成中...' : '重新生成行程' }}
+                        </button>
                     </div>
                 </div>
 
@@ -296,13 +293,12 @@
         const favorites = Vue.ref([]);
         const isReplanning = Vue.ref(false);
         const isRegenerating = Vue.ref(false);
+        const editInstruction = Vue.ref('');
         const changeReason = Vue.ref('下雨');
         const targetDay = Vue.ref(1);
         const replanMessage = Vue.ref('');
         const generationRecordId = Vue.ref(null);
         const isItineraryFavorite = Vue.ref(false);
-        const editingIndex = Vue.ref(-1);
-        const editDraft = Vue.reactive({ title: '', activitiesText: '' });
         const activityLabel = (activity) => typeof activity === 'string'
             ? activity
             : (activity.name || activity.place || '未命名行程');
@@ -572,6 +568,10 @@
 
         const regenerateEditedItinerary = async () => {
             if (!itinerary.value?.length || isRegenerating.value) return;
+            if (!editInstruction.value.trim()) {
+                alert('請輸入想要修改的內容');
+                return;
+            }
             isRegenerating.value = true;
             generationError.value = '';
             replanMessage.value = '';
@@ -586,6 +586,7 @@
                         budget: form.budget,
                         style: form.style,
                         conditions: form.conditions,
+                        editInstruction: editInstruction.value.trim(),
                         itinerary: itinerary.value
                     })
                 });
@@ -604,7 +605,7 @@
                         generationRecordId.value = record ? record.id : null;
                     })
                 ]);
-                replanMessage.value = '已根據編輯後的行程重新生成。';
+                replanMessage.value = '已根據你的修改說明重新生成行程。';
             } catch (error) {
                 generationError.value = error.message || 'AI 重新生成失敗，請稍後再試。';
             } finally {
@@ -619,6 +620,7 @@
         };
 
         const saveItinerary = () => {
+            if (!isAuthenticated) return;
             localStorage.setItem(itineraryStorageKey, JSON.stringify({
                 itinerary: itinerary.value || [],
                 form: {
@@ -633,36 +635,6 @@
             }));
         };
 
-        const startEdit = (day, index) => {
-            editingIndex.value = index;
-            editDraft.title = day.title;
-            editDraft.activitiesText = (day.activities || []).map(activityLabel).join(', ');
-        };
-
-        const saveEdit = (index) => {
-            const activities = editDraft.activitiesText
-                .split(',')
-                .map(activity => activity.trim())
-                .filter(Boolean);
-            itinerary.value[index].title = editDraft.title.trim() || itinerary.value[index].title;
-            itinerary.value[index].activities = activities.length
-                ? activities.map((activity) => ({
-                    time: '',
-                    name: activity,
-                    place: activity,
-                    category: '活動',
-                    address: '',
-                    description: '',
-                }))
-                : itinerary.value[index].activities;
-            editingIndex.value = -1;
-            saveItinerary();
-        };
-
-        const cancelEdit = () => {
-            editingIndex.value = -1;
-        };
-
         const toggleFavorite = (spot) => {
             const idx = favorites.value.findIndex(f => f.name === spot.name);
             if (idx > -1) favorites.value.splice(idx, 1);
@@ -673,8 +645,12 @@
         const isFavorite = (spot) => favorites.value.some(f => f.name === spot.name);
 
         Vue.onMounted(() => {
-            const savedItinerary = localStorage.getItem(itineraryStorageKey);
-            if (savedItinerary) {
+            const savedItinerary = isAuthenticated
+                ? localStorage.getItem(itineraryStorageKey)
+                : null;
+            if (!isAuthenticated) {
+                localStorage.removeItem(itineraryStorageKey);
+            } else if (savedItinerary) {
                 try {
                     const parsedState = JSON.parse(savedItinerary);
                     // 相容舊版只保存行程陣列的格式。
@@ -718,9 +694,9 @@
 
         return {
             form, today, isGenerating, itinerary, insights, isReplanning, targetDay, changeReason, replanMessage,
-            editingIndex, editDraft, isItineraryFavorite, toggleItineraryFavorite, toggleFavorite, isFavorite, generateItinerary, replanItinerary, regenerateEditedItinerary, isRegenerating, activityLabel, activityMapsUrl, itineraryMapsUrl,
+            editInstruction, isItineraryFavorite, toggleItineraryFavorite, toggleFavorite, isFavorite, generateItinerary, replanItinerary, regenerateEditedItinerary, isRegenerating, activityLabel, activityMapsUrl, itineraryMapsUrl,
             generationSecondsLeft, generationError,
-            removeDay, startEdit, saveEdit, cancelEdit, shareItinerary, downloadItinerary
+            removeDay, shareItinerary, downloadItinerary
         };
         }
     }).mount('#app');

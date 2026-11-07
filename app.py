@@ -977,6 +977,7 @@ def regenerate_itinerary():
     start_date_text = str(data.get('startDate', '')).strip()
     style = str(data.get('style', 'balanced')).strip() or 'balanced'
     conditions = str(data.get('conditions', '')).strip()
+    edit_instruction = str(data.get('editInstruction', '')).strip()
     itinerary = data.get('itinerary')
     try:
         days = max(1, min(14, int(data.get('days', len(itinerary or [])))))
@@ -986,8 +987,12 @@ def regenerate_itinerary():
         return jsonify({'error': '請先輸入目的地。'}), 400
     if len(conditions) > 1000:
         return jsonify({'error': '旅遊條件不可超過 1000 個字。'}), 400
+    if len(edit_instruction) > 2000:
+        return jsonify({'error': '修改內容不可超過 2000 個字。'}), 400
+    if not edit_instruction:
+        return jsonify({'error': '請輸入想要修改的內容。'}), 400
     if not isinstance(itinerary, list) or not itinerary:
-        return jsonify({'error': '請先編輯並保存至少一天的行程。'}), 400
+        return jsonify({'error': '請先生成至少一天的行程。'}), 400
     days = min(days, len(itinerary))
     try:
         start_date = datetime.strptime(start_date_text, '%Y-%m-%d') if start_date_text else datetime.now()
@@ -997,11 +1002,13 @@ def regenerate_itinerary():
     edited_itinerary = itinerary[:days]
     try:
         result = generate_gemini_json(f"""
-請根據旅客編輯後的行程，重新生成完整的 {city} {days} 天旅遊行程。
+請根據旅客的修改要求，重新生成完整的 {city} {days} 天旅遊行程。
 出發日期：{start_date.strftime('%Y-%m-%d')}
 旅行風格：{style}；預算：{data.get('budget') or '未指定'} TWD。
 特殊條件：{conditions or '無額外條件'}。
-以下是旅客編輯後的原始行程，必須保留其中明確指定的景點、活動與偏好，並在此基礎上改善順序、交通與時間安排：
+旅客想要修改的內容：
+{edit_instruction}
+以下是目前的原始行程。請依照旅客的修改要求調整，並保留未要求修改的內容與偏好：
 {json.dumps(edited_itinerary, ensure_ascii=False)}
 每天安排 4 至 6 個明確且真實的地點或店名，依時間排序；不可使用「探索市區」等泛稱。
 回傳 JSON：{{"itinerary":[{{"day":1,"date":"YYYY-MM-DD","title":"短標題","description":"30字內摘要",
