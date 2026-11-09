@@ -60,6 +60,16 @@ create table if not exists public.ai_generation_favorites (
   unique (user_id, generation_record_id)
 );
 
+alter table public.ai_generation_records
+  add column if not exists parent_generation_record_id uuid
+  references public.ai_generation_records (id) on delete set null;
+
+alter table public.ai_generation_favorites
+  add column if not exists is_featured boolean not null default false;
+
+create index if not exists idx_ai_generation_records_parent
+on public.ai_generation_records (parent_generation_record_id);
+
 -- 瀏覽與搜尋紀錄
 create table if not exists public.search_history (
   id uuid primary key default gen_random_uuid(),
@@ -305,6 +315,13 @@ create policy "Users can delete own generation favorites"
 on public.ai_generation_favorites
 for delete
 using (auth.uid() = user_id);
+
+drop policy if exists "Users can update own generation favorites" on public.ai_generation_favorites;
+create policy "Users can update own generation favorites"
+on public.ai_generation_favorites
+for update
+using (auth.uid() = user_id)
+with check (auth.uid() = user_id);
 
 -- search_history policies
 drop policy if exists "Users can read own search history" on public.search_history;

@@ -155,6 +155,13 @@
                                 class="text-sm font-bold text-blue-600 hover:text-blue-800 px-2">複製</button>
                             <button @click="downloadGeneration(item)" type="button"
                                 class="text-sm font-bold text-blue-600 hover:text-blue-800 px-2">下載</button>
+                            <button @click="openRegenerate(item)" type="button"
+                                class="text-sm font-bold text-emerald-600 hover:text-emerald-800 px-2">重新生成</button>
+                            <button @click="featureGeneration(item)" type="button"
+                                class="text-amber-500 hover:text-amber-600 px-2 text-xl"
+                                :aria-label="item.is_featured ? '取消首選行程' : '設為首選行程'">
+                                {{ item.is_featured ? '★' : '☆' }}
+                            </button>
                             <button @click.stop="requestDelete('generation', item)"
                                 class="text-slate-300 hover:text-red-500 px-2 text-xl" aria-label="取消行程收藏">🗑️</button>
                         </div>
@@ -262,6 +269,29 @@
                 </div>
             </div>
 
+            <div v-if="regenerateTarget" class="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 px-4"
+                @click.self="closeRegenerate">
+                <form @submit.prevent="regenerateGeneration"
+                    class="w-full max-w-lg rounded-2xl bg-white p-6 shadow-2xl">
+                    <h3 class="text-xl font-bold">重新生成「{{ regenerateTarget.record.title }}」</h3>
+                    <p class="mt-2 text-sm text-slate-500">會保留原行程，並將新結果以另一頁加入收藏。</p>
+                    <label class="mt-5 block text-sm font-bold text-slate-600" for="regenerate-conditions">
+                        新的旅遊條件
+                    </label>
+                    <textarea id="regenerate-conditions" v-model="regenerateConditions" rows="5"
+                        placeholder="例如：改成親子友善、增加美食、避開爬坡路線..."
+                        class="mt-2 w-full rounded-xl border border-slate-200 px-4 py-3 outline-none focus:border-blue-500"></textarea>
+                    <div class="mt-5 flex justify-end gap-3">
+                        <button @click="closeRegenerate" type="button"
+                            class="rounded-xl border border-slate-200 px-4 py-2 font-bold text-slate-600">取消</button>
+                        <button type="submit" :disabled="isRegenerating"
+                            class="rounded-xl bg-blue-600 px-4 py-2 font-bold text-white disabled:opacity-50">
+                            {{ isRegenerating ? 'AI 生成中...' : '開始生成' }}
+                        </button>
+                    </div>
+                </form>
+            </div>
+
             <div v-if="downloadTarget" class="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 px-4"
                 @click.self="cancelDownload">
                 <div class="w-full max-w-md rounded-2xl bg-white p-6 shadow-2xl">
@@ -308,6 +338,9 @@
         const selectedUploadDetails = Vue.ref(null);
         const deleteTarget = Vue.ref(null);
         const downloadTarget = Vue.ref(null);
+        const regenerateTarget = Vue.ref(null);
+        const regenerateConditions = Vue.ref('');
+        const isRegenerating = Vue.ref(false);
         const isDeleting = Vue.ref(false);
         const isUploading = Vue.ref(false);
         const uploadError = Vue.ref('');
@@ -438,6 +471,88 @@
                 );
             });
         });
+            const openRegenerate = (item) => {
+                const context = item.record.context_data || {};
+                regenerateTarget.value = item;
+                regenerateConditions.value = context.conditions || '';
+            };
+            const closeRegenerate = () => {
+                if (!isRegenerating.value) regenerateTarget.value = null;
+            };
+            const loadGenerationFavorites = async () => {
+                const response = await fetch('/api/generation-favorites');
+                if (!response.ok) throw new Error('讀取行程收藏失敗。');
+                const data = await response.json();
+                generationFavorites.value = data.favorites || [];
+            };
+            const featureGeneration = async (item) => {
+                try {
+                    const response = await fetch(
+                        `/api/generation-favorites/${item.generation_record_id}/feature`,
+                        { method: 'PATCH' }
+                    );
+                    const data = await response.json().catch(() => ({}));
+                    if (!response.ok) throw new Error(data.error || '設定首選行程失敗。');
+                    await loadGenerationFavorites();
+                } catch (error) {
+                    alert(error.message || '設定首選行程失敗，請稍後再試。');
+                }
+            };
+            const regenerateGeneration = async () => {
+                const item = regenerateTarget.value;
+                if (!item || isRegenerating.value) return;
+                const record = item.record;
+                const context = record.context_data || {};
+                isRegenerating.value = true;
+                try {
+                    const response = await fetch('/api/regenerate_itinerary', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            city: context.city || record.title?.replace(/ 行程.*$/, '') || '',
+                            days: Number.isInteger(context.days) ? context.days : getItinerary(item).length,
+                            startDate: context.startDate || new Date().toISOString().slice(0, 10),
+                            budget: context.budget || '',
+                            style: context.style || 'balanced',
+                            conditions: regenerateConditions.value.trim(),
+                            editInstruction: `請依照以下新的旅遊條件重新生成完整行程：${regenerateConditions.value.trim()}`,
+                            itinerary: getItinerary(item)
+                        })
+                    });
+                    const data = await response.json().catch(() => ({}));
+                    if (!response.ok) throw new Error(data.error || 'AI 重新生成失敗。');
+                    const saveResponse = await fetch('/api/generations', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            city: context.city,
+                            days: data.days || context.days,
+                            startDate: context.startDate,
+                            budget: context.budget,
+                            style: context.style,
+                            conditions: regenerateConditions.value.trim(),
+                            parentGenerationRecordId: record.id,
+                            itinerary: data.itinerary
+                        })
+                    });
+                    const saved = await saveResponse.json().catch(() => ({}));
+                    if (!saveResponse.ok) throw new Error(saved.error || '新行程儲存失敗。');
+                    const favoriteResponse = await fetch('/api/generation-favorites', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ generationRecordId: saved.record.id })
+                    });
+                    const favoriteData = await favoriteResponse.json().catch(() => ({}));
+                    if (!favoriteResponse.ok) throw new Error(favoriteData.error || '新行程收藏失敗。');
+                    await loadGenerationFavorites();
+                    closeRegenerate();
+                    alert('已生成新的行程頁面，原本內容仍保留。');
+                } catch (error) {
+                    alert(error.message || 'AI 重新生成失敗，請稍後再試。');
+                } finally {
+                    isRegenerating.value = false;
+                }
+            };
         const getItinerary = (item) => {
             try {
                 const content = item.record.generated_content;
@@ -609,7 +724,7 @@
                 generationFavorites.value = data.favorites || [];
             }
         });
-        return { categories, activeCategory, favorites, generationFavorites, filteredFavorites, filteredGenerationFavorites, uploadedFiles, filteredUploadedFiles, selectedUploadFile, uploadTitle, isUploading, uploadError, selectedUploadDetails, deleteTarget, deleteTargetLabel, isDeleting, downloadTarget, searchInput, searchQuery, runSearch, selectUploadFile, uploadFile, toggleUploadDetails, requestDelete, cancelDelete, confirmDelete, cancelDownload, downloadAsText, downloadAsPdf, closeDetails, selectedSpot, selectedGeneration, getItinerary, mapsUrl, spotImage, activityMapsUrl, itineraryMapsUrl, selectSpot, selectGeneration, shareGeneration, downloadGeneration };
+        return { categories, activeCategory, favorites, generationFavorites, filteredFavorites, filteredGenerationFavorites, uploadedFiles, filteredUploadedFiles, selectedUploadFile, uploadTitle, isUploading, uploadError, selectedUploadDetails, deleteTarget, deleteTargetLabel, isDeleting, downloadTarget, regenerateTarget, regenerateConditions, isRegenerating, searchInput, searchQuery, runSearch, selectUploadFile, uploadFile, toggleUploadDetails, requestDelete, cancelDelete, confirmDelete, cancelDownload, downloadAsText, downloadAsPdf, closeDetails, openRegenerate, closeRegenerate, regenerateGeneration, featureGeneration, selectedSpot, selectedGeneration, getItinerary, mapsUrl, spotImage, activityMapsUrl, itineraryMapsUrl, selectSpot, selectGeneration, shareGeneration, downloadGeneration };
         }
         }).mount('#app');
     </script>

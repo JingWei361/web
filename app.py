@@ -691,14 +691,21 @@ def create_generation_record():
     data = request.get_json(silent=True) or {}
     itinerary = data.get('itinerary')
     city = str(data.get('city', '')).strip()
+    parent_generation_record_id = str(data.get('parentGenerationRecordId') or '').strip() or None
     if not city or not isinstance(itinerary, list) or not itinerary:
         return jsonify({'error': '缺少有效的行程資料。'}), 400
 
     try:
+        if parent_generation_record_id:
+            parent_rows = user_client.table('ai_generation_records').select('id').eq(
+                'id', parent_generation_record_id
+            ).eq('user_id', user_id).limit(1).execute().data or []
+            if not parent_rows:
+                return jsonify({'error': '找不到原始行程紀錄。'}), 404
         record = user_client.table('ai_generation_records').insert({
             'user_id': user_id,
             'record_type': 'itinerary',
-            'title': f'{city} 行程',
+            'title': f'{city} 行程' + ('（重新生成）' if parent_generation_record_id else ''),
             'prompt': str(data.get('prompt') or f'規劃 {city} 的旅行行程'),
             'generated_content': json.dumps(itinerary, ensure_ascii=False),
             'context_data': {
@@ -708,7 +715,9 @@ def create_generation_record():
                 'budget': data.get('budget'),
                 'style': data.get('style'),
                 'conditions': data.get('conditions'),
+                'parentGenerationRecordId': parent_generation_record_id,
             },
+            'parent_generation_record_id': parent_generation_record_id,
             'model_name': 'demo-itinerary-generator',
             'request_payload': data,
             'response_payload': {'itinerary': itinerary},
@@ -725,8 +734,10 @@ def get_generation_favorites():
         return error
     try:
         rows = user_client.table('ai_generation_favorites').select(
-            'id, generation_record_id, created_at'
-        ).eq('user_id', user_id).order('created_at', desc=True).execute().data or []
+            'id, generation_record_id, created_at, is_featured'
+        ).eq('user_id', user_id).order('is_featured', desc=True).order(
+            'created_at', desc=True
+        ).execute().data or []
         record_ids = [row['generation_record_id'] for row in rows]
         records = []
         if record_ids:
@@ -805,6 +816,7 @@ def create_generation_favorite():
         favorite = user_client.table('ai_generation_favorites').insert({
             'user_id': user_id,
             'generation_record_id': generation_record_id,
+            'is_featured': False,
         }).execute().data[0]
         return jsonify({'favorite': favorite}), 201
     except Exception as error:
@@ -823,6 +835,34 @@ def delete_generation_favorite(generation_record_id):
         return jsonify({'message': '已取消行程收藏。'})
     except Exception as error:
         return jsonify({'error': f'取消行程收藏失敗：{error}'}), 500
+
+
+@app.patch('/api/generation-favorites/<generation_record_id>/feature')
+def feature_generation_favorite(generation_record_id):
+    user_client, user_id, error = authentication_required()
+    if error:
+        return error
+    try:
+        favorite_rows = user_client.table('ai_generation_favorites').select('id').eq(
+            'user_id', user_id
+        ).eq('generation_record_id', generation_record_id).limit(1).execute().data or []
+        if not favorite_rows:
+            return jsonify({'error': '找不到可設定的收藏行程。'}), 404
+        current_rows = user_client.table('ai_generation_favorites').select('is_featured').eq(
+            'user_id', user_id
+        ).eq('generation_record_id', generation_record_id).limit(1).execute().data or []
+        is_currently_featured = bool(current_rows[0].get('is_featured')) if current_rows else False
+        user_client.table('ai_generation_favorites').update({
+            'is_featured': False,
+        }).eq('user_id', user_id).execute()
+        favorite = user_client.table('ai_generation_favorites').update({
+            'is_featured': not is_currently_featured,
+        }).eq('user_id', user_id).eq(
+            'generation_record_id', generation_record_id
+        ).execute().data[0]
+        return jsonify({'favorite': favorite})
+    except Exception as error:
+        return jsonify({'error': f'設定首選行程失敗：{error}'}), 500
 
 
 @app.post('/api/search_history')
@@ -985,10 +1025,6 @@ def regenerate_itinerary():
         return jsonify({'error': '旅行天數格式不正確。'}), 400
     if not city:
         return jsonify({'error': '請先輸入目的地。'}), 400
-    if len(conditions) > 1000:
-        return jsonify({'error': '旅遊條件不可超過 1000 個字。'}), 400
-    if len(edit_instruction) > 2000:
-        return jsonify({'error': '修改內容不可超過 2000 個字。'}), 400
     if not edit_instruction:
         return jsonify({'error': '請輸入想要修改的內容。'}), 400
     if not isinstance(itinerary, list) or not itinerary:
@@ -1010,22 +1046,21 @@ def regenerate_itinerary():
 {edit_instruction}
 以下是目前的原始行程。請依照旅客的修改要求調整，並保留未要求修改的內容與偏好：
 {json.dumps(edited_itinerary, ensure_ascii=False)}
-每天安排 4 至 6 個明確且真實的地點或店名，依時間排序；不可使用「探索市區」等泛稱。
+請依照旅客條件安排適合的活動數量，活動數量不設上下限；每個活動應盡量使用明確且真實的地點或店名。
 回傳 JSON：{{"itinerary":[{{"day":1,"date":"YYYY-MM-DD","title":"短標題","description":"30字內摘要",
 "activities":[{{"time":"09:00","name":"明確景點或店名","place":"明確地點名稱","address":"簡短地址",
 "category":"景點","description":"20字內說明"}}]}}]}}
 day 必須是 1 到 {days}，日期依序增加。category 只能是：食物、活動、購物、景點、酒店、交通、其他。
 """)
         generated = result.get('itinerary') if isinstance(result, dict) else None
-        if not isinstance(generated, list) or len(generated) != days:
+        if not isinstance(generated, list) or not generated:
             raise ValueError("Gemini returned an invalid regenerated itinerary shape.")
         if any(
             not isinstance(day_plan, dict)
-            or not isinstance(day_plan.get('activities'), list)
-            or len(day_plan['activities']) < 4
             for day_plan in generated
         ):
-            raise ValueError("Gemini returned fewer than four activities for a day.")
+            raise ValueError("Gemini returned an invalid day shape.")
+        days = len(generated)
         normalized_itinerary = [
             normalize_day(
                 day_plan,
@@ -1050,9 +1085,12 @@ day 必須是 1 到 {days}，日期依序增加。category 只能是：食物、
     except RuntimeError:
         app.logger.error("GEMINI_API_KEY is not configured for itinerary regeneration.")
         return jsonify({'error': 'Gemini API 尚未設定，無法重新生成行程。'}), 503
+    except ValueError as error:
+        app.logger.warning("Gemini returned invalid edited itinerary: %s", error)
+        return jsonify({'error': 'AI 回傳的行程格式無法使用，請稍後重試。'}), 502
     except Exception:
         app.logger.exception("Gemini edited itinerary regeneration failed.")
-        return jsonify({'error': 'AI 重新生成行程失敗，請稍後再試。'}), 502
+        return jsonify({'error': 'AI 服務目前無法重新生成行程，請稍後再試。'}), 502
 
 
 @app.post('/api/recognize_image')
