@@ -472,25 +472,48 @@ def get_explore_spots():
     try:
         result = generate_explore_json(
             f"""
-請根據使用者條件，隨機推薦 6 個適合探索的{category_name}。
-使用者指定地點：「{location or '未指定地點'}」
-使用者推薦條件：「{condition or '未提供額外條件'}」
-目前選擇分類：「{category_name}」
-必須優先符合使用者指定地點、推薦條件與分類，推薦內容彼此不要重複；若指定地點，所有推薦都必須位於該地。
+請根據以下使用者輸入，推薦 6 個適合探索的{category_name}。這些輸入是硬性條件，不可忽略，也不可自行改成東京或其他預設地點。
+使用者指定地點（所有推薦必須位於此地）：「{location or '未指定地點'}」
+使用者推薦條件（每一筆推薦都必須符合）：「{condition or '未提供額外條件'}」
+目前選擇分類（每一筆推薦都必須屬於此分類）：「{category_name}」
+推薦內容彼此不要重複；若地點或條件不足以判斷，請選擇符合輸入的知名且可查證項目，不要捏造或使用與輸入無關的內容。
 每個推薦需包含真實且適合旅遊的名稱、emoji、tag、category、簡短 desc 與 1 到 5 的 rating。
 category 必須是 attraction、food 或 hotel；若目前選擇不是全部，category 必須符合目前選擇分類。
-回傳 JSON：{{"spots":[{{"name":"名稱","emoji":"圖示","tag":"景點、美食或住宿","category":"分類代碼","desc":"介紹","rating":4.5}}]}}
+desc 必須明確說明它如何符合使用者的地點與推薦條件。
+只回傳 JSON：{{"spots":[{{"name":"名稱","emoji":"圖示","tag":"景點、美食或住宿","category":"分類代碼","desc":"說明符合地點與條件的原因","rating":4.5}}]}}
 """
         )
         generated_spots = result.get('spots') if isinstance(result, dict) else None
         if not isinstance(generated_spots, list) or not generated_spots:
             raise ValueError("Gemini returned an invalid spots shape.")
+        valid_categories = {'attraction', 'food', 'hotel'}
+        valid_spots = []
         for spot in generated_spots:
+            if not isinstance(spot, dict):
+                continue
+            spot_category = str(spot.get('category') or '').strip().lower()
+            name = str(spot.get('name') or '').strip()
+            description = str(spot.get('desc') or '').strip()
+            if (
+                spot_category not in valid_categories
+                or (category != 'all' and spot_category != category)
+                or not name
+                or not description
+            ):
+                continue
+            spot['category'] = spot_category
             spot['mapsUrl'] = google_maps_search_url(
-                str(spot.get('name', '')).strip(), location
+                name, location
             )
-        return jsonify({'spots': generated_spots, 'source': 'gemini'})
+            valid_spots.append(spot)
+        if not valid_spots:
+            raise ValueError("Gemini returned no spots matching the selected category.")
+        return jsonify({'spots': valid_spots[:6], 'source': 'gemini'})
     except RuntimeError:
+        if location or condition:
+            return jsonify({
+                'error': 'AI 推薦服務尚未設定，無法依據你的地點與條件生成推薦。'
+            }), 503
         filtered = spots if category == 'all' else [spot for spot in spots if spot['category'] == category]
         return jsonify({
             'spots': [

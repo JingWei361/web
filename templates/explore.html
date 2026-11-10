@@ -75,8 +75,15 @@
             <div v-if="isLoading" class="flex justify-center py-20">
                 <div class="animate-spin rounded-full h-12 w-12 border-4 border-blue-600 border-t-transparent"></div>
             </div>
-
             {% raw %}
+            <div v-else-if="errorMessage" class="rounded-2xl border border-red-200 bg-red-50 px-6 py-10 text-center">
+                <p class="font-bold text-red-700">{{ errorMessage }}</p>
+                <button @click="loadSpots(true)"
+                    class="mt-4 rounded-xl bg-red-600 px-5 py-2 font-bold text-white hover:bg-red-700">
+                    再試一次
+                </button>
+            </div>
+
             <div v-else-if="filteredSpots.length" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
                 <div v-for="spot in filteredSpots" :key="spot.name"
                     class="bg-white rounded-2xl overflow-hidden shadow-sm hover:shadow-md transition group">
@@ -130,10 +137,11 @@
             setup() {
                 const isAuthenticated = {% if user %}true{% else %}false{% endif %};
         const storageScope = {{ (user or 'guest') | tojson }};
-        const exploreStorageKey = `my_travel_explore_${storageScope}`;
+        const exploreStorageKey = `my_travel_explore_v2_${storageScope}`;
         const favorites = Vue.ref([]);
         const exploreSpots = Vue.ref([]);
         const isLoading = Vue.ref(false);
+        const errorMessage = Vue.ref('');
         const locationInput = Vue.ref('');
         const conditionInput = Vue.ref('');
         const runSearch = () => {
@@ -192,6 +200,7 @@
                 }
             }
             isLoading.value = true;
+            errorMessage.value = '';
             try {
                 if (isAuthenticated) {
                     await fetch('/api/search_history', {
@@ -220,13 +229,8 @@
                 saveExploreState();
             } catch (error) {
                 console.error('載入失敗:', error);
-                // 測試用備用數據
-                exploreSpots.value = [
-                    { name: '雷門', emoji: '⛩️', tag: '景點', desc: '充滿歷史感的紅色大燈籠。', rating: 4.8 },
-                    { name: '一蘭拉麵', emoji: '🍜', tag: '美食', desc: '豚骨拉麵的經典代表作。', rating: 4.5 },
-                    { name: '築地市場', emoji: '🍣', tag: '美食', desc: '最鮮美的海鮮生魚片都在這。', rating: 4.7 }
-                ];
-                saveExploreState();
+                exploreSpots.value = [];
+                errorMessage.value = error.message || '推薦載入失敗，請稍後再試。';
             } finally {
                 isLoading.value = false;
             }
@@ -292,6 +296,7 @@
             toggleFavorite,
             isFavorite,
             isLoading,
+            errorMessage,
             categories,
             currentCategory,
             changeCategory,
