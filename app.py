@@ -27,14 +27,30 @@ from xml.sax.saxutils import escape
 
 load_dotenv()
 
+
+def get_env(name: str, legacy_name: str | None = None, default: str | None = None) -> str | None:
+    value = os.getenv(name)
+    if value:
+        return value
+    if legacy_name:
+        value = os.getenv(legacy_name)
+        if value:
+            return value
+    return default
+
+
 app = Flask(__name__, template_folder='templates')
-app.secret_key = 'ai_traveler_secret_key_2026'
+app.secret_key = get_env('SECRET_KEY', 'REACT_APP_SECRET_KEY', 'ai_traveler_secret_key_2026')
 CORS(app, resources={r"/api/*": {"origins": "*"}})
 
-GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.5-flash-lite")
-GEMINI_TIMEOUT_MS = int(os.getenv("GEMINI_TIMEOUT_MS", "60000"))
-EXPLORE_GEMINI_MODEL = os.getenv("EXPLORE_GEMINI_MODEL", "gemini-3.5-flash-lite")
-EXPLORE_GEMINI_TIMEOUT_MS = int(os.getenv("EXPLORE_GEMINI_TIMEOUT_MS", "60000"))
+GEMINI_MODEL = get_env("GEMINI_MODEL", "REACT_APP_GEMINI_MODEL", "gemini-3.5-flash-lite")
+GEMINI_TIMEOUT_MS = int(get_env("GEMINI_TIMEOUT_MS", "REACT_APP_GEMINI_TIMEOUT_MS", "60000"))
+EXPLORE_GEMINI_MODEL = get_env(
+    "EXPLORE_GEMINI_MODEL", "REACT_APP_EXPLORE_GEMINI_MODEL", "gemini-3.5-flash-lite"
+)
+EXPLORE_GEMINI_TIMEOUT_MS = int(
+    get_env("EXPLORE_GEMINI_TIMEOUT_MS", "REACT_APP_EXPLORE_GEMINI_TIMEOUT_MS", "60000")
+)
 UPLOAD_BUCKET = 'user-files'
 
 spots = [
@@ -50,15 +66,15 @@ spots = [
 # Supabase 設定
 # ==========================================
 
-SUPABASE_URL = os.getenv("SUPABASE_URL")
-SUPABASE_KEY = os.getenv("SUPABASE_KEY")
+SUPABASE_URL = get_env("SUPABASE_URL", "REACT_APP_SUPABASE_URL")
+SUPABASE_KEY = get_env("SUPABASE_KEY", "REACT_APP_SUPABASE_KEY")
 if not SUPABASE_URL or not SUPABASE_KEY:
     raise RuntimeError("SUPABASE_URL and SUPABASE_KEY must be configured.")
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 
 def get_gemini_client() -> genai.Client | None:
-    api_key = os.getenv("GEMINI_API_KEY")
+    api_key = get_env("GEMINI_API_KEY", "REACT_APP_GEMINI_API_KEY")
     if not api_key:
         return None
     return genai.Client(
@@ -68,7 +84,7 @@ def get_gemini_client() -> genai.Client | None:
 
 
 def get_explore_gemini_client() -> genai.Client | None:
-    api_key = os.getenv("EXPLORE_GEMINI_API_KEY")
+    api_key = get_env("EXPLORE_GEMINI_API_KEY", "REACT_APP_EXPLORE_GEMINI_API_KEY")
     if not api_key:
         return None
     return genai.Client(
@@ -109,7 +125,7 @@ def generate_gemini_json(prompt: str, contents: Any = None) -> Any:
 def generate_explore_json(prompt: str) -> Any:
     client = get_explore_gemini_client()
     if client is None:
-        raise RuntimeError("EXPLORE_GEMINI_API_KEY is not configured.")
+        raise RuntimeError("REACT_APP_EXPLORE_GEMINI_API_KEY is not configured.")
     response = client.models.generate_content(
         model=EXPLORE_GEMINI_MODEL,
         contents=prompt,
