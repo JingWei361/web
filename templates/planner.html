@@ -448,7 +448,8 @@
                         loadInsights().catch(error => console.error('載入旅遊資訊失敗:', error));
                     }
                 } else {
-                    alert(data.error || '生成失敗');
+                    generationError.value = data.error || `生成失敗（HTTP ${response.status}）`;
+                    alert(generationError.value);
                 }
             } catch (error) {
                 if (error.message === 'GENERATION_TIMEOUT' || error.name === 'AbortError') {

@@ -45,14 +45,8 @@ app.secret_key = get_env('SECRET_KEY', 'REACT_APP_SECRET_KEY', 'ai_traveler_secr
 app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1)
 CORS(app, resources={r"/api/*": {"origins": "*"}})
 
-GEMINI_MODEL = get_env("GEMINI_MODEL", "REACT_APP_GEMINI_MODEL", "gemini-3.5-flash-lite")
+GEMINI_MODEL = get_env("GEMINI_MODEL", "REACT_APP_GEMINI_MODEL", "gemini-3-flash-preview")
 GEMINI_TIMEOUT_MS = int(get_env("GEMINI_TIMEOUT_MS", "REACT_APP_GEMINI_TIMEOUT_MS", "60000"))
-EXPLORE_GEMINI_MODEL = get_env(
-    "EXPLORE_GEMINI_MODEL", "REACT_APP_EXPLORE_GEMINI_MODEL", "gemini-3.5-flash-lite"
-)
-EXPLORE_GEMINI_TIMEOUT_MS = int(
-    get_env("EXPLORE_GEMINI_TIMEOUT_MS", "REACT_APP_EXPLORE_GEMINI_TIMEOUT_MS", "60000")
-)
 UPLOAD_BUCKET = 'user-files'
 
 spots = [
@@ -85,16 +79,6 @@ def get_gemini_client() -> genai.Client | None:
     )
 
 
-def get_explore_gemini_client() -> genai.Client | None:
-    api_key = get_env("EXPLORE_GEMINI_API_KEY", "REACT_APP_EXPLORE_GEMINI_API_KEY")
-    if not api_key:
-        return None
-    return genai.Client(
-        api_key=api_key,
-        http_options=types.HttpOptions(timeout=EXPLORE_GEMINI_TIMEOUT_MS),
-    )
-
-
 def parse_gemini_json(text: str) -> Any:
     cleaned = text.strip()
     fenced = re.search(r"```(?:json)?\s*(.*?)\s*```", cleaned, re.DOTALL)
@@ -121,27 +105,6 @@ def generate_gemini_json(prompt: str, contents: Any = None) -> Any:
     )
     if not response.text:
         raise ValueError("Gemini returned an empty response.")
-    return parse_gemini_json(response.text)
-
-
-def generate_explore_json(prompt: str) -> Any:
-    client = get_explore_gemini_client()
-    if client is None:
-        raise RuntimeError("REACT_APP_EXPLORE_GEMINI_API_KEY is not configured.")
-    response = client.models.generate_content(
-        model=EXPLORE_GEMINI_MODEL,
-        contents=prompt,
-        config={
-            "system_instruction": (
-                "你是探索景點推薦助手。只回傳有效 JSON，不要 Markdown 或額外文字。"
-            ),
-            "response_mime_type": "application/json",
-            "temperature": 0.9,
-            "max_output_tokens": 4096,
-        },
-    )
-    if not response.text:
-        raise ValueError("Explore Gemini returned an empty response.")
     return parse_gemini_json(response.text)
 
 
@@ -441,9 +404,12 @@ day 必須是 1 到 {days}，日期依序增加。category 只能是：食物、
             'insights': build_trip_insights(city, days, start_date, float(budget or 0), conditions),
             'source': 'gemini',
         })
-    except RuntimeError:
-        app.logger.error("GEMINI_API_KEY is not configured.")
-        return jsonify({'error': 'Gemini API 尚未設定，請確認 GEMINI_API_KEY 環境變數。'}), 503
+    except RuntimeError as error:
+        if "not configured" in str(error):
+            app.logger.error("GEMINI_API_KEY is not configured.")
+            return jsonify({'error': 'Gemini API 尚未設定，請確認 GEMINI_API_KEY 環境變數。'}), 503
+        app.logger.exception("Gemini itinerary generation failed.")
+        return jsonify({'error': 'Gemini API 呼叫失敗，請確認 API key、模型名稱與部署設定。'}), 502
     except Exception:
         app.logger.exception("Gemini itinerary generation failed.")
         return jsonify({'error': 'AI 行程規劃失敗，請稍後再試。'}), 502
@@ -470,7 +436,7 @@ def get_explore_spots():
         return jsonify({'error': '無效的景點分類。'}), 400
 
     try:
-        result = generate_explore_json(
+        result = generate_gemini_json(
             f"""
 請根據以下使用者輸入，推薦 6 個適合探索的{category_name}。這些輸入是硬性條件，不可忽略，也不可自行改成東京或其他預設地點。
 使用者指定地點（所有推薦必須位於此地）：「{location or '未指定地點'}」
@@ -487,11 +453,20 @@ desc 必須明確說明它如何符合使用者的地點與推薦條件。
         if not isinstance(generated_spots, list) or not generated_spots:
             raise ValueError("Gemini returned an invalid spots shape.")
         valid_categories = {'attraction', 'food', 'hotel'}
+        category_aliases = {
+            'attraction': 'attraction',
+            '景點': 'attraction',
+            'food': 'food',
+            '美食': 'food',
+            'hotel': 'hotel',
+            '住宿': 'hotel',
+        }
         valid_spots = []
         for spot in generated_spots:
             if not isinstance(spot, dict):
                 continue
-            spot_category = str(spot.get('category') or '').strip().lower()
+            raw_category = str(spot.get('category') or '').strip()
+            spot_category = category_aliases.get(raw_category.lower(), category_aliases.get(raw_category, ''))
             name = str(spot.get('name') or '').strip()
             description = str(spot.get('desc') or '').strip()
             if (
@@ -509,7 +484,12 @@ desc 必須明確說明它如何符合使用者的地點與推薦條件。
         if not valid_spots:
             raise ValueError("Gemini returned no spots matching the selected category.")
         return jsonify({'spots': valid_spots[:6], 'source': 'gemini'})
-    except RuntimeError:
+    except RuntimeError as error:
+        if "not configured" not in str(error):
+            app.logger.exception("Explore Gemini generation failed.")
+            return jsonify({
+                'error': 'AI 推薦服務目前無法使用，請確認 Vercel 的 API 金鑰與模型設定。'
+            }), 502
         if location or condition:
             return jsonify({
                 'error': 'AI 推薦服務尚未設定，無法依據你的地點與條件生成推薦。'
