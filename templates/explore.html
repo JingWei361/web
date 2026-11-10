@@ -42,7 +42,8 @@
                 <!-- 新增：類別選擇按鈕 -->
                 <div class="flex bg-white p-1 rounded-xl shadow-sm border border-slate-100">
                     <button v-for="cat in categories" :key="cat.id" @click="changeCategory(cat.id)"
-                        :class="['px-6 py-2 rounded-lg text-sm font-bold transition', 
+                        :aria-pressed="currentCategory === cat.id"
+                        :class="['px-6 py-2 rounded-lg text-sm font-bold transition',
                                 currentCategory === cat.id ? 'bg-blue-600 text-white shadow-md' : 'text-slate-500 hover:bg-slate-50']">
                         {% raw %}{{ cat.name }}{% endraw %}
                     </button>
@@ -160,14 +161,17 @@
             }
         };
 
+        const getSearchKey = () => JSON.stringify({
+            category: currentCategory.value,
+            location: locationInput.value.trim(),
+            condition: conditionInput.value.trim()
+        });
+
         const saveExploreState = () => {
             try {
                 const savedState = JSON.parse(localStorage.getItem(exploreStorageKey) || '{}');
-                savedState.location = locationInput.value.trim();
-                savedState.condition = conditionInput.value.trim();
-                savedState.currentCategory = currentCategory.value;
-                savedState.spotsByCategory = savedState.spotsByCategory || {};
-                savedState.spotsByCategory[currentCategory.value] = exploreSpots.value;
+                savedState.searchKey = getSearchKey();
+                savedState.spots = exploreSpots.value;
                 localStorage.setItem(exploreStorageKey, JSON.stringify(savedState));
             } catch (error) {
                 console.warn('保存探索景點紀錄失敗:', error);
@@ -178,11 +182,9 @@
             if (!force) {
                 try {
                     const savedState = JSON.parse(localStorage.getItem(exploreStorageKey) || '{}');
-                    const sameInputs = savedState.location === locationInput.value.trim()
-                        && savedState.condition === conditionInput.value.trim();
-                    const savedSpots = savedState.spotsByCategory?.[currentCategory.value];
-                    if (sameInputs && Array.isArray(savedSpots) && savedSpots.length) {
-                        exploreSpots.value = savedSpots;
+                    if (savedState.searchKey === getSearchKey()
+                        && Array.isArray(savedState.spots) && savedState.spots.length) {
+                        exploreSpots.value = savedState.spots;
                         return;
                     }
                 } catch (error) {
@@ -231,7 +233,9 @@
         };
 
         const changeCategory = (catId) => {
+            if (currentCategory.value === catId) return;
             currentCategory.value = catId;
+            loadSpots();
         };
 
         const toggleFavorite = async (spot) => {
@@ -265,11 +269,12 @@
         Vue.onMounted(() => {
             try {
                 const savedState = JSON.parse(localStorage.getItem(exploreStorageKey) || '{}');
-                if (categories.some(category => category.id === savedState.currentCategory)) {
-                    currentCategory.value = savedState.currentCategory;
+                const savedSearch = savedState.searchKey ? JSON.parse(savedState.searchKey) : null;
+                if (savedSearch && categories.some(category => category.id === savedSearch.category)) {
+                    currentCategory.value = savedSearch.category;
+                    if (typeof savedSearch.location === 'string') locationInput.value = savedSearch.location;
+                    if (typeof savedSearch.condition === 'string') conditionInput.value = savedSearch.condition;
                 }
-                if (typeof savedState.location === 'string') locationInput.value = savedState.location;
-                if (typeof savedState.condition === 'string') conditionInput.value = savedState.condition;
             } catch (error) {
                 localStorage.removeItem(exploreStorageKey);
             }

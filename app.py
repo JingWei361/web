@@ -14,6 +14,7 @@ from flask_cors import CORS
 from google import genai
 from google.genai import types
 from supabase import create_client, Client
+from werkzeug.middleware.proxy_fix import ProxyFix
 from werkzeug.utils import secure_filename
 from docx import Document
 from pypdf import PdfReader
@@ -41,6 +42,7 @@ def get_env(name: str, legacy_name: str | None = None, default: str | None = Non
 
 app = Flask(__name__, template_folder='templates')
 app.secret_key = get_env('SECRET_KEY', 'REACT_APP_SECRET_KEY', 'ai_traveler_secret_key_2026')
+app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1)
 CORS(app, resources={r"/api/*": {"origins": "*"}})
 
 GEMINI_MODEL = get_env("GEMINI_MODEL", "REACT_APP_GEMINI_MODEL", "gemini-3.5-flash-lite")
@@ -476,20 +478,25 @@ def get_explore_spots():
 目前選擇分類：「{category_name}」
 必須優先符合使用者指定地點、推薦條件與分類，推薦內容彼此不要重複；若指定地點，所有推薦都必須位於該地。
 每個推薦需包含真實且適合旅遊的名稱、emoji、tag、category、簡短 desc 與 1 到 5 的 rating。
-category 必須是 attraction、food 或 hotel，且要符合目前選擇分類。
-回傳 JSON：{{"spots":[{{"name":"名稱","emoji":"圖示","tag":"景點、美食或住宿","category":"{category if category != 'all' else 'attraction'}","desc":"介紹","rating":4.5}}]}}
+category 必須是 attraction、food 或 hotel；若目前選擇不是全部，category 必須符合目前選擇分類。
+回傳 JSON：{{"spots":[{{"name":"名稱","emoji":"圖示","tag":"景點、美食或住宿","category":"分類代碼","desc":"介紹","rating":4.5}}]}}
 """
         )
         generated_spots = result.get('spots') if isinstance(result, dict) else None
         if not isinstance(generated_spots, list) or not generated_spots:
             raise ValueError("Gemini returned an invalid spots shape.")
         for spot in generated_spots:
-            spot['mapsUrl'] = google_maps_search_url(str(spot.get('name', '')).strip())
+            spot['mapsUrl'] = google_maps_search_url(
+                str(spot.get('name', '')).strip(), location
+            )
         return jsonify({'spots': generated_spots, 'source': 'gemini'})
     except RuntimeError:
         filtered = spots if category == 'all' else [spot for spot in spots if spot['category'] == category]
         return jsonify({
-            'spots': [{**spot, 'mapsUrl': google_maps_search_url(spot['name'])} for spot in filtered],
+            'spots': [
+                {**spot, 'mapsUrl': google_maps_search_url(spot['name'], location)}
+                for spot in filtered
+            ],
             'source': 'fallback',
         })
     except Exception:
@@ -1236,7 +1243,12 @@ def login():
 @app.route('/auth/google')
 def google_login():
     try:
-        redirect_url = url_for('auth_callback', _external=True)
+        public_app_url = get_env('PUBLIC_APP_URL')
+        redirect_url = (
+            f"{public_app_url.rstrip('/')}{url_for('auth_callback')}"
+            if public_app_url
+            else url_for('auth_callback', _external=True)
+        )
         res = supabase.auth.sign_in_with_oauth({
             "provider": "google",
             "options": {"redirect_to": redirect_url},
