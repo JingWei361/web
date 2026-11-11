@@ -12,6 +12,7 @@ from dotenv import load_dotenv
 from flask import Flask, flash, jsonify, redirect, render_template, request, send_file, session, url_for
 from flask_cors import CORS
 from google import genai
+from google.genai import errors as genai_errors
 from google.genai import types
 from supabase import create_client, Client
 from werkzeug.middleware.proxy_fix import ProxyFix
@@ -45,7 +46,8 @@ app.secret_key = get_env('SECRET_KEY', 'REACT_APP_SECRET_KEY', 'ai_traveler_secr
 app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1)
 CORS(app, resources={r"/api/*": {"origins": "*"}})
 
-GEMINI_MODEL = get_env("GEMINI_MODEL", "REACT_APP_GEMINI_MODEL", "gemini-3-flash-preview")
+GEMINI_FALLBACK_MODEL = "gemini-3.5-flash-lite"
+GEMINI_MODEL = get_env("GEMINI_MODEL", "REACT_APP_GEMINI_MODEL", GEMINI_FALLBACK_MODEL)
 GEMINI_TIMEOUT_MS = int(get_env("GEMINI_TIMEOUT_MS", "REACT_APP_GEMINI_TIMEOUT_MS", "60000"))
 UPLOAD_BUCKET = 'user-files'
 
@@ -90,12 +92,34 @@ def parse_gemini_json(text: str) -> Any:
     return json.loads(cleaned)
 
 
+def generate_gemini_content(client: genai.Client, contents: Any, config: Any = None) -> Any:
+    try:
+        return client.models.generate_content(
+            model=GEMINI_MODEL,
+            contents=contents,
+            config=config,
+        )
+    except genai_errors.ClientError as error:
+        if error.code != 404 or GEMINI_MODEL == GEMINI_FALLBACK_MODEL:
+            raise
+        app.logger.warning(
+            "Gemini model %s is unavailable; retrying with %s.",
+            GEMINI_MODEL,
+            GEMINI_FALLBACK_MODEL,
+        )
+        return client.models.generate_content(
+            model=GEMINI_FALLBACK_MODEL,
+            contents=contents,
+            config=config,
+        )
+
+
 def generate_gemini_json(prompt: str, contents: Any = None) -> Any:
     client = get_gemini_client()
     if client is None:
         raise RuntimeError("GEMINI_API_KEY is not configured.")
-    response = client.models.generate_content(
-        model=GEMINI_MODEL,
+    response = generate_gemini_content(
+        client,
         contents=contents if contents is not None else prompt,
         config={
             "system_instruction": (
@@ -334,8 +358,8 @@ def chat():
         return jsonify({"error": "Gemini API 尚未設定，請確認 GEMINI_API_KEY 環境變數。"}), 503
 
     try:
-        response = client.models.generate_content(
-            model=GEMINI_MODEL,
+        response = generate_gemini_content(
+            client,
             contents=prompt.strip(),
         )
         return jsonify({"response": response.text})
