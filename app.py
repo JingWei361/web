@@ -70,7 +70,10 @@ supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 
 def get_gemini_client() -> genai.Client | None:
-    api_key = get_env("GEMINI_API_KEY", "REACT_APP_GEMINI_API_KEY")
+    api_key = (
+        get_env("GEMINI_API_KEY", "REACT_APP_GEMINI_API_KEY")
+        or os.getenv("REACT_APP_EXPLORE_GEMINI_API_KEY")
+    )
     if not api_key:
         return None
     return genai.Client(
