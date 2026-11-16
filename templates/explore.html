@@ -101,8 +101,8 @@
                         </div>
                         <p class="text-slate-500 text-sm mb-4 leading-relaxed">{{ spot.desc }}</p>
                         <div class="flex items-center justify-between">
-                            <span class="bg-blue-50 px-2 py-1 rounded text-xs text-blue-500 font-bold"># {{ spot.tag
-                                }}</span>
+                            <span class="rounded-full px-2 py-1 text-xs font-bold"
+                                :class="categoryBadgeClass(spot.category || spot.tag)"># {{ spot.tag }}</span>
                             <div class="flex items-center gap-3">
                                 <a :href="spot.mapsUrl || mapsUrl(spot.name)" target="_blank" rel="noopener"
                                     class="text-xs font-bold text-blue-600 hover:text-blue-800">🗺️ 導航</a>
@@ -269,6 +269,20 @@
 
         const isFavorite = (spot) => favorites.value.some(f => f.name === spot.name);
         const mapsUrl = (place) => `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(place)}`;
+        const categoryBadgeClass = (category) => ({
+            '食物': 'bg-orange-100 text-orange-800',
+            '美食': 'bg-orange-100 text-orange-800',
+            'food': 'bg-orange-100 text-orange-800',
+            '活動': 'bg-purple-100 text-purple-800',
+            '購物': 'bg-pink-100 text-pink-800',
+            '景點': 'bg-emerald-100 text-emerald-800',
+            'attraction': 'bg-emerald-100 text-emerald-800',
+            '酒店': 'bg-indigo-100 text-indigo-800',
+            '住宿': 'bg-indigo-100 text-indigo-800',
+            'hotel': 'bg-indigo-100 text-indigo-800',
+            '交通': 'bg-cyan-100 text-cyan-800',
+            '其他': 'bg-slate-200 text-slate-700'
+        }[category] || 'bg-slate-200 text-slate-700');
 
         Vue.onMounted(() => {
             try {
@@ -301,7 +315,8 @@
             currentCategory,
             changeCategory,
             loadSpots,
-            mapsUrl
+            mapsUrl,
+            categoryBadgeClass
         };
         }
         }).mount('#app');

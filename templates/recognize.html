@@ -132,7 +132,7 @@
             isRecognitionResult: true
         }));
 
-        const onFileChange = (e) => {
+        const onFileChange = async (e) => {
             const file = e.target.files[0];
             if (!file) return;
             selectedFile.value = file;
@@ -142,30 +142,73 @@
             localStorage.removeItem(recognizeStorageKey);
             const reader = new FileReader();
             reader.onload = () => {
+                if (typeof reader.result !== 'string') {
+                    console.error('保存圖片預覽失敗：圖片資料格式無效。');
+                    return;
+                }
                 try {
-                    localStorage.setItem(recognizeStorageKey, JSON.stringify({
-                        imagePreview: reader.result
-                    }));
+                    const savedState = JSON.parse(localStorage.getItem(recognizeStorageKey) || '{}');
+                    savedState.imagePreview = reader.result;
+                    localStorage.setItem(recognizeStorageKey, JSON.stringify(savedState));
                 } catch (error) {
                     console.warn('保存圖片預覽失敗:', error);
                 }
             };
-            reader.readAsDataURL(file);
+            reader.onerror = () => console.error('讀取圖片預覽失敗:', reader.error);
+            try {
+                reader.readAsDataURL(await prepareImageForUpload(file));
+            } catch (error) {
+                console.error('壓縮圖片預覽失敗:', error);
+            }
+        };
+
+        const prepareImageForUpload = async (file) => {
+            const bitmap = await createImageBitmap(file);
+            const maxDimension = 2048;
+            const scale = Math.min(1, maxDimension / Math.max(bitmap.width, bitmap.height));
+            const canvas = document.createElement('canvas');
+            canvas.width = Math.max(1, Math.round(bitmap.width * scale));
+            canvas.height = Math.max(1, Math.round(bitmap.height * scale));
+
+            let compressedImage;
+            try {
+                const context = canvas.getContext('2d');
+                if (!context) throw new Error('Could not create an image canvas.');
+                context.fillStyle = '#fff';
+                context.fillRect(0, 0, canvas.width, canvas.height);
+                context.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+                compressedImage = await new Promise(resolve => canvas.toBlob(resolve, 'image/jpeg', 0.85));
+            } finally {
+                bitmap.close();
+            }
+
+            if (!compressedImage) throw new Error('Could not encode the image.');
+            return new File([compressedImage], 'recognition.jpg', { type: 'image/jpeg' });
         };
 
         const uploadImage = async () => {
             isAnalyzing.value = true;
 
+            let uploadFile;
+            try {
+                uploadFile = await prepareImageForUpload(selectedFile.value);
+            } catch (error) {
+                console.error('圖片處理失敗:', error);
+                alert('無法處理這張圖片，請另選圖片或另存為 JPEG 後重試。');
+                isAnalyzing.value = false;
+                return;
+            }
+
             // 準備上傳資料 (FormData 格式才能傳圖片檔案)
             const formData = new FormData();
-            formData.append('image', selectedFile.value);
+            formData.append('image', uploadFile);
 
             try {
                 const response = await fetch('/api/recognize_image', {
                     method: 'POST',
                     body: formData
                 });
-                const data = await response.json();
+                const data = await response.json().catch(() => ({}));
                 if (response.ok) {
                     result.value = data;
                     try {
@@ -176,7 +219,7 @@
                         console.warn('保存圖片辨識結果失敗:', error);
                     }
                 } else {
-                    alert('辨識失敗');
+                    alert(data.error || `辨識失敗（HTTP ${response.status}）`);
                 }
             } catch (error) {
                 alert('網路連線異常');

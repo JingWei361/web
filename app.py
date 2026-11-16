@@ -2,10 +2,13 @@ import os
 import json
 import re
 import mimetypes
+import base64
 from io import BytesIO
 from datetime import datetime, timedelta
 from typing import Any
-from urllib.parse import quote
+from urllib.error import HTTPError, URLError
+from urllib.parse import quote, urlencode
+from urllib.request import Request, urlopen
 from uuid import uuid4
 
 from dotenv import load_dotenv
@@ -49,6 +52,26 @@ CORS(app, resources={r"/api/*": {"origins": "*"}})
 GEMINI_FALLBACK_MODEL = "gemini-3.5-flash-lite"
 GEMINI_MODEL = get_env("GEMINI_MODEL", "REACT_APP_GEMINI_MODEL", GEMINI_FALLBACK_MODEL)
 GEMINI_TIMEOUT_MS = int(get_env("GEMINI_TIMEOUT_MS", "REACT_APP_GEMINI_TIMEOUT_MS", "60000"))
+GROQ_VISION_MODEL = get_env("GROQ_VISION_MODEL", default="qwen/qwen3.8-27b")
+ROUTE_OPTIMIZATION_GUIDANCE = """
+路線順暢是重要要求：先把地理位置相近的地點排在同一時段或同一天，沿著同一方向逐區移動；
+避免景點間來回折返、跨區後又返回原區、重複造訪同一地點。依實際合理的交通時間排序，
+預留轉乘與步行時間；若距離或交通資訊不確定，優先選擇鄰近景點並避免宣稱精確時間。
+"""
+MEAL_AND_ATTRACTION_GUIDANCE = """
+除非旅客的明確條件另有要求，每天安排早餐、午餐、晚餐各一個餐飲活動，category 設為「食物」，
+並用 meal 欄位分別標示「早餐」、「午餐」、「晚餐」；餐飲活動需安排在合理用餐時段，優先提供真實店名。
+除此之外，每天安排 3 至 4 個 category 為「景點」的明確景點。每天總活動數為 6 至 7 個，
+不要把交通、休息或泛稱的「自由活動」當成餐點或景點。
+"""
+DAILY_ACCOMMODATION_GUIDANCE = """
+每一天都要依據當日景點的地理分布，推薦一個具體、真實的行政區或街區作為住宿區域，
+優先選擇靠近當日主要景點群且方便隔日交通的地點；用 accommodationReason 簡短說明選擇原因。
+不同天的行程區域不同時，住宿建議也應相應調整，不要每天都推薦同一個車站周邊。
+"""
+OPEN_METEO_GEOCODING_URL = "https://geocoding-api.open-meteo.com/v1/search"
+OPEN_METEO_FORECAST_URL = "https://api.open-meteo.com/v1/forecast"
+TDX_REFERENCE_URL = "https://tdx.transportdata.tw/api-service/swagger"
 UPLOAD_BUCKET = 'user-files'
 
 spots = [
@@ -84,7 +107,7 @@ def get_gemini_client() -> genai.Client | None:
     )
 
 
-def parse_gemini_json(text: str) -> Any:
+def parse_model_json(text: str) -> Any:
     cleaned = text.strip()
     fenced = re.search(r"```(?:json)?\s*(.*?)\s*```", cleaned, re.DOTALL)
     if fenced:
@@ -132,7 +155,188 @@ def generate_gemini_json(prompt: str, contents: Any = None) -> Any:
     )
     if not response.text:
         raise ValueError("Gemini returned an empty response.")
-    return parse_gemini_json(response.text)
+    return parse_model_json(response.text)
+
+
+class GroqAPIError(RuntimeError):
+    def __init__(self, status_code: int) -> None:
+        self.status_code = status_code
+        super().__init__(f"Groq API returned HTTP {status_code}.")
+
+
+def generate_groq_image_json(prompt: str, image_bytes: bytes, mime_type: str) -> Any:
+    api_key = get_env("GROQ_API_KEY")
+    if not api_key:
+        raise RuntimeError("GROQ_API_KEY is not configured.")
+
+    image_data_url = (
+        f"data:{mime_type};base64,"
+        f"{base64.b64encode(image_bytes).decode('ascii')}"
+    )
+    payload = json.dumps({
+        "model": GROQ_VISION_MODEL,
+        "messages": [{
+            "role": "user",
+            "content": [
+                {"type": "text", "text": prompt},
+                {"type": "image_url", "image_url": {"url": image_data_url}},
+            ],
+        }],
+        "response_format": {"type": "json_object"},
+        "max_completion_tokens": 1200,
+        "temperature": 0.2,
+        "stream": False,
+    }).encode("utf-8")
+    api_request = Request(
+        "https://api.groq.com/openai/v1/chat/completions",
+        data=payload,
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+            "User-Agent": "AITravelAssistant/1.0",
+        },
+        method="POST",
+    )
+    try:
+        with urlopen(api_request, timeout=60) as response:
+            response_data = json.loads(response.read())
+    except HTTPError as error:
+        raise GroqAPIError(error.code) from error
+    except (URLError, TimeoutError) as error:
+        raise RuntimeError("Could not connect to the Groq API.") from error
+
+    choices = response_data.get("choices") or []
+    message = choices[0].get("message") if choices else None
+    output_text = message.get("content") if isinstance(message, dict) else None
+    if not isinstance(output_text, str) or not output_text.strip():
+        raise ValueError("Groq returned no image-recognition result.")
+    return parse_model_json(output_text)
+
+
+class OpenMeteoError(RuntimeError):
+    pass
+
+
+def open_meteo_get_json(url: str, params: dict[str, str]) -> dict[str, Any]:
+    api_request = Request(
+        f"{url}?{urlencode(params)}",
+        headers={"User-Agent": "AITravelAssistant/1.0"},
+    )
+    try:
+        with urlopen(api_request, timeout=15) as response:
+            result = json.loads(response.read())
+    except HTTPError as error:
+        raise OpenMeteoError(f"Open-Meteo returned HTTP {error.code}.") from error
+    except (URLError, TimeoutError) as error:
+        raise OpenMeteoError("Could not connect to Open-Meteo.") from error
+    except json.JSONDecodeError as error:
+        raise OpenMeteoError("Open-Meteo returned invalid JSON.") from error
+    if not isinstance(result, dict):
+        raise OpenMeteoError("Open-Meteo returned an invalid response.")
+    return result
+
+
+def open_meteo_weather_code(code: int) -> str:
+    return {
+        0: "晴朗",
+        1: "大致晴朗",
+        2: "局部多雲",
+        3: "陰天",
+        45: "有霧",
+        48: "霧凇",
+        51: "毛毛雨",
+        53: "毛毛雨",
+        55: "大毛毛雨",
+        56: "凍毛毛雨",
+        57: "凍毛毛雨",
+        61: "小雨",
+        63: "中雨",
+        65: "大雨",
+        66: "凍雨",
+        67: "凍雨",
+        71: "小雪",
+        73: "中雪",
+        75: "大雪",
+        77: "雪粒",
+        80: "短暫陣雨",
+        81: "陣雨",
+        82: "強陣雨",
+        85: "短暫陣雪",
+        86: "陣雪",
+        95: "雷雨",
+        96: "雷雨伴隨冰雹",
+        99: "雷雨伴隨冰雹",
+    }.get(code, "天氣多變")
+
+
+def get_weather_forecast(
+    city: str,
+    days: int,
+    start_date: datetime,
+) -> tuple[list[dict[str, Any]], str]:
+    weather = [
+        {
+            "day": day,
+            "date": (start_date + timedelta(days=day - 1)).strftime("%Y-%m-%d"),
+            "condition": "暫無預報",
+            "temperature": "暫無預報",
+            "rain": None,
+            "available": False,
+        }
+        for day in range(1, days + 1)
+    ]
+    last_date = (start_date + timedelta(days=days - 1)).date()
+    today = datetime.now().date()
+    if start_date.date() < today or last_date > today + timedelta(days=15):
+        return weather, "Open-Meteo 僅支援今天起 16 天內的預報；此日期範圍無法取得預報。"
+
+    try:
+        geocoding = open_meteo_get_json(OPEN_METEO_GEOCODING_URL, {
+            "name": city,
+            "count": "1",
+            "language": "zh",
+            "format": "json",
+        })
+        locations = geocoding.get("results") or []
+        if not locations:
+            return weather, f"Open-Meteo 找不到「{city}」的位置，暫時無法提供天氣預報。"
+        location = locations[0]
+        forecast = open_meteo_get_json(OPEN_METEO_FORECAST_URL, {
+            "latitude": str(location["latitude"]),
+            "longitude": str(location["longitude"]),
+            "daily": (
+                "weather_code,temperature_2m_max,temperature_2m_min,"
+                "precipitation_probability_max"
+            ),
+            "timezone": "auto",
+            "start_date": start_date.strftime("%Y-%m-%d"),
+            "end_date": last_date.strftime("%Y-%m-%d"),
+        })
+        daily = forecast.get("daily") or {}
+        dates = daily.get("time") or []
+        weather_by_date = {day["date"]: day for day in weather}
+        for index, date_text in enumerate(dates):
+            day = weather_by_date.get(date_text)
+            if day is None:
+                continue
+            maximum = daily["temperature_2m_max"][index]
+            minimum = daily["temperature_2m_min"][index]
+            rain = daily["precipitation_probability_max"][index]
+            day.update({
+                "condition": open_meteo_weather_code(int(daily["weather_code"][index])),
+                "temperature": f"{minimum:.0f}-{maximum:.0f}°C",
+                "rain": rain,
+                "available": True,
+            })
+        if not any(day["available"] for day in weather):
+            raise OpenMeteoError("Open-Meteo returned no daily forecast.")
+        return weather, f"天氣資料來源：Open-Meteo（{location.get('name', city)}）"
+    except (IndexError, KeyError, TypeError, ValueError) as error:
+        app.logger.warning("Open-Meteo returned an invalid forecast for %s: %s", city, error)
+        return weather, "Open-Meteo 回傳的天氣資料格式無效，暫時無法提供預報。"
+    except OpenMeteoError as error:
+        app.logger.warning("Open-Meteo forecast unavailable for %s: %s", city, error)
+        return weather, "Open-Meteo 天氣服務目前無法使用，請稍後再試。"
 
 
 def google_maps_search_url(place: str, city: str = '') -> str:
@@ -173,6 +377,9 @@ def normalize_activity(
             'category': category,
             'description': str(activity.get('description') or '').strip(),
         }
+        meal = str(activity.get('meal') or '').strip()
+        if meal in {'早餐', '午餐', '晚餐'}:
+            normalized['meal'] = meal
     else:
         place = str(activity or '').strip()
         normalized = {
@@ -205,6 +412,16 @@ def normalize_day(
         normalize_activity(activity, city, index, include_maps=include_maps)
         for index, activity in enumerate(activities, start=1)
     ]
+    for index in range(1, len(normalized_activities)):
+        previous = normalized_activities[index - 1]
+        current = normalized_activities[index]
+        normalized_activities[index]["transportUrl"] = google_maps_directions_url(
+            [
+                previous["address"] or previous["place"],
+                current["address"] or current["place"],
+            ],
+            city,
+        ) or ""
     places = [
         activity['address'] or activity['place']
         for activity in normalized_activities
@@ -215,11 +432,41 @@ def normalize_day(
         'date': str(source.get('date') or date_text),
         'title': str(source.get('title') or f'{city} 第 {day_number} 天'),
         'description': str(source.get('description') or '').strip(),
+        'accommodationArea': str(source.get('accommodationArea') or '').strip(),
+        'accommodationReason': str(source.get('accommodationReason') or '').strip(),
         'activities': normalized_activities,
     }
     if include_maps:
         normalized_day['mapsUrl'] = google_maps_directions_url(places, city)
     return normalized_day
+
+
+def has_required_daily_meals_and_attractions(day_plan: Any) -> bool:
+    if not isinstance(day_plan, dict):
+        return False
+    activities = day_plan.get('activities')
+    if not isinstance(activities, list) or not 6 <= len(activities) <= 7:
+        return False
+
+    meal_activities = [
+        activity for activity in activities
+        if isinstance(activity, dict)
+        and str(activity.get('category') or '').strip() in {'食物', '美食', 'food'}
+    ]
+    meals = {
+        str(activity.get('meal') or '').strip()
+        for activity in meal_activities
+    }
+    attraction_count = sum(
+        1 for activity in activities
+        if isinstance(activity, dict)
+        and str(activity.get('category') or '').strip() in {'景點', 'attraction'}
+    )
+    return (
+        len(meal_activities) == 3
+        and meals == {'早餐', '午餐', '晚餐'}
+        and 3 <= attraction_count <= 4
+    )
 
 
 def get_authenticated_client() -> tuple[Any, Any]:
@@ -397,10 +644,15 @@ def generate_itinerary():
 旅客的額外條件與特殊需求如下，必須優先遵守並反映在行程安排中：
 「{conditions or '無額外條件'}」
 如果條件與一般建議衝突，請以旅客條件為準；無法滿足時，請在當天 description 說明原因並提供替代方案。
-只回傳 JSON，不要解釋。每天至少安排 4 個活動，最多安排 6 個活動，按照時間排序。
+{ROUTE_OPTIMIZATION_GUIDANCE}
+{MEAL_AND_ATTRACTION_GUIDANCE}
+{DAILY_ACCOMMODATION_GUIDANCE}
+只回傳 JSON，不要解釋。每天的 activities 按照時間排序。
 格式：{{"itinerary":[{{"day":1,"date":"YYYY-MM-DD","title":"短標題","description":"30字內摘要",
-"activities":[{{"time":"09:00","name":"明確景點或店名","place":"明確地點名稱","address":"簡短地址",
-"category":"景點","description":"20字內說明"}}]}}]}}
+"accommodationArea":"住宿行政區或街區","accommodationReason":"依當日景點選擇的理由",
+"activities":[{{"time":"08:00","name":"早餐：明確店名","place":"明確店名","category":"食物",
+"meal":"早餐","description":"餐點簡介"}},{{"time":"09:00","name":"明確景點或店名",
+"place":"明確地點名稱","address":"簡短地址","category":"景點","description":"20字內說明"}}]}}]}}
 day 必須是 1 到 {days}，日期依序增加。category 只能是：食物、活動、購物、景點、酒店、交通、其他。
 必須使用真實、明確的地點或店名，不要使用「探索市區」等泛稱。
 """
@@ -409,13 +661,10 @@ day 必須是 1 到 {days}，日期依序增加。category 只能是：食物、
         itinerary = result.get('itinerary') if isinstance(result, dict) else None
         if not isinstance(itinerary, list) or len(itinerary) != days:
             raise ValueError("Gemini returned an invalid itinerary shape.")
-        if any(
-            not isinstance(day_plan, dict)
-            or not isinstance(day_plan.get('activities'), list)
-            or len(day_plan['activities']) < 4
-            for day_plan in itinerary
-        ):
-            raise ValueError("Gemini returned fewer than four activities for a day.")
+        if any(not has_required_daily_meals_and_attractions(day_plan) for day_plan in itinerary):
+            return jsonify({
+                'error': '行程未符合每日三餐及 3 至 4 個景點的安排，請重新生成或調整旅遊條件。'
+            }), 502
         normalized_itinerary = [
             normalize_day(
                 day_plan,
@@ -973,22 +1222,25 @@ def build_trip_insights(
     tickets = round(budget * 0.13) if budget else days * 500
     reserve = round(budget * 0.15) if budget else days * 600
     total = hotel + transport + food + tickets + reserve
-    transport_summary = '建議使用大眾運輸，景點間平均約 25 分鐘。'
-    transport_tip = '尖峰時段請預留 15 分鐘轉乘緩衝。'
+    transport_summary = '每段景點間的大眾運輸路線可開啟地圖查詢。'
+    transport_tip = '交通時間與班次以出發前的即時查詢為準。'
     if conditions:
         transport_tip = f'已依你的條件「{conditions[:120]}」保留交通安排彈性。'
+    weather, weather_status = get_weather_forecast(city, days, start_date)
+    flight_url = (
+        "https://www.google.com/travel/flights?"
+        + urlencode({"q": f"Flights to {city}"})
+    )
     return {
-        'weather': [
-            {
-                'day': day,
-                'date': (start_date + timedelta(days=day - 1)).strftime('%Y-%m-%d'),
-                'condition': '晴時多雲' if day % 2 else '短暫雨',
-                'temperature': '18-24°C',
-                'rain': 20 if day % 2 else 60,
-            }
-            for day in range(1, days + 1)
-        ],
-        'transport': {'summary': transport_summary, 'estimatedCost': transport, 'tip': transport_tip},
+        'weather': weather,
+        'weatherStatus': weather_status,
+        'transport': {
+            'summary': transport_summary,
+            'estimatedCost': transport,
+            'tip': transport_tip,
+            'tdxUrl': TDX_REFERENCE_URL,
+            'flightsUrl': flight_url,
+        },
         'accommodation': {'area': f'{city} 車站周邊', 'nightlyBudget': round(hotel / days), 'reason': '靠近交通節點，適合首次造訪與每日往返。'},
         'budget': {
             'hotel': hotel, 'transport': transport, 'food': food, 'tickets': tickets, 'reserve': reserve, 'total': total,
@@ -1027,11 +1279,20 @@ def replan():
 請重新安排 {city} 第 {target_day} 天的旅程，原因是「{reason}」。
 同時必須遵守旅客原本設定的條件：「{conditions or '無額外條件'}」。
 原本行程：{json.dumps(target_plan, ensure_ascii=False)}
-只替換這一天，請提供至少 4 個、最多 6 個按照時間排序的明確地點或店名。
+{ROUTE_OPTIMIZATION_GUIDANCE}
+{MEAL_AND_ATTRACTION_GUIDANCE}
+{DAILY_ACCOMMODATION_GUIDANCE}
+只替換這一天，activities 按照時間排序。
 回傳 JSON：{{"day":{target_day},"date":"{date_text}","title":"標題","description":"調整原因與建議",
-"activities":[{{"time":"09:00-11:00","name":"明確地點或店名","place":"可搜尋地點","address":"完整地址","category":"景點","description":"說明"}}]}}
+"accommodationArea":"住宿行政區或街區","accommodationReason":"依當日景點選擇的理由",
+"activities":[{{"time":"08:00","name":"早餐：明確店名","place":"明確店名","category":"食物","meal":"早餐","description":"餐點簡介"}},
+{{"time":"09:00-11:00","name":"明確地點或店名","place":"可搜尋地點","address":"完整地址","category":"景點","description":"說明"}}]}}
 category 只能使用：食物、活動、購物、景點、酒店、交通、其他。
 """)
+        if not has_required_daily_meals_and_attractions(result):
+            return jsonify({
+                'error': '重新安排的行程未符合每日三餐及 3 至 4 個景點，請再試一次。'
+            }), 502
         replanned = normalize_day(result, city, target_day, date_text, include_maps=False)
     except RuntimeError:
         app.logger.error("GEMINI_API_KEY is not configured for replanning.")
@@ -1040,14 +1301,18 @@ category 只能使用：食物、活動、購物、景點、酒店、交通、�
             'title': f'{city} 第 {target_day} 天（已依{reason}調整）',
             'description': f'因{reason}改安排室內或彈性景點。',
             'activities': [
-                {'time': '10:00-11:30', 'name': f'{city} 車站周邊', 'place': f'{city} 車站周邊',
-                 'category': '交通', 'description': '保留交通彈性。'},
-                {'time': '12:00-13:30', 'name': fallback_activity, 'place': fallback_activity,
-                 'category': '活動', 'description': '依突發狀況調整。'},
-                {'time': '14:00-15:30', 'name': f'{city} 室內文化景點', 'place': f'{city} 室內文化景點',
+                {'time': '08:00', 'name': f'早餐：{city} 在地早餐店', 'place': f'{city} 在地早餐店',
+                 'category': '食物', 'meal': '早餐', 'description': '依所在地選擇合適店家。'},
+                {'time': '09:30-11:00', 'name': f'{city} 室內文化景點', 'place': f'{city} 室內文化景點',
                  'category': '景點', 'description': '安排室內行程，降低天候影響。'},
-                {'time': '16:00-17:30', 'name': f'{city} 在地商圈', 'place': f'{city} 在地商圈',
-                 'category': '購物', 'description': '保留自由探索與購物時間。'},
+                {'time': '12:00', 'name': f'午餐：{city} 在地餐廳', 'place': f'{city} 在地餐廳',
+                 'category': '食物', 'meal': '午餐', 'description': '依所在地選擇合適店家。'},
+                {'time': '13:30-15:00', 'name': fallback_activity, 'place': fallback_activity,
+                 'category': '景點', 'description': '依突發狀況調整。'},
+                {'time': '15:30-17:00', 'name': f'{city} 室內展館', 'place': f'{city} 室內展館',
+                 'category': '景點', 'description': '安排室內行程，降低天候影響。'},
+                {'time': '18:00', 'name': f'晚餐：{city} 在地餐廳', 'place': f'{city} 在地餐廳',
+                 'category': '食物', 'meal': '晚餐', 'description': '依所在地選擇合適店家。'},
             ],
         }, city, target_day, date_text, include_maps=False)
     except Exception:
@@ -1099,20 +1364,27 @@ def regenerate_itinerary():
 {edit_instruction}
 以下是目前的原始行程。請依照旅客的修改要求調整，並保留未要求修改的內容與偏好：
 {json.dumps(edited_itinerary, ensure_ascii=False)}
-請依照旅客條件安排適合的活動數量，活動數量不設上下限；每個活動應盡量使用明確且真實的地點或店名。
+{ROUTE_OPTIMIZATION_GUIDANCE}
+{MEAL_AND_ATTRACTION_GUIDANCE}
+{DAILY_ACCOMMODATION_GUIDANCE}
+每個活動應盡量使用明確且真實的地點或店名。
 回傳 JSON：{{"itinerary":[{{"day":1,"date":"YYYY-MM-DD","title":"短標題","description":"30字內摘要",
-"activities":[{{"time":"09:00","name":"明確景點或店名","place":"明確地點名稱","address":"簡短地址",
-"category":"景點","description":"20字內說明"}}]}}]}}
+"accommodationArea":"住宿行政區或街區","accommodationReason":"依當日景點選擇的理由",
+"activities":[{{"time":"08:00","name":"早餐：明確店名","place":"明確店名","category":"食物",
+"meal":"早餐","description":"餐點簡介"}},{{"time":"09:00","name":"明確景點或店名",
+"place":"明確地點名稱","address":"簡短地址","category":"景點","description":"20字內說明"}}]}}]}}
 day 必須是 1 到 {days}，日期依序增加。category 只能是：食物、活動、購物、景點、酒店、交通、其他。
 """)
         generated = result.get('itinerary') if isinstance(result, dict) else None
         if not isinstance(generated, list) or not generated:
             raise ValueError("Gemini returned an invalid regenerated itinerary shape.")
         if any(
-            not isinstance(day_plan, dict)
+            not has_required_daily_meals_and_attractions(day_plan)
             for day_plan in generated
         ):
-            raise ValueError("Gemini returned an invalid day shape.")
+            return jsonify({
+                'error': '重新生成的行程未符合每日三餐及 3 至 4 個景點，請調整修改內容後重試。'
+            }), 502
         days = len(generated)
         normalized_itinerary = [
             normalize_day(
@@ -1154,8 +1426,9 @@ def recognize_image():
     image_bytes = image.read()
     if not image_bytes:
         return jsonify({'error': '圖片內容不可為空。'}), 400
-    if not image.mimetype or not image.mimetype.startswith('image/'):
-        return jsonify({'error': '只支援圖片檔案。'}), 400
+    supported_image_types = {'image/jpeg', 'image/png', 'image/webp', 'image/gif'}
+    if image.mimetype not in supported_image_types:
+        return jsonify({'error': '僅支援 JPEG、PNG、WEBP 或 GIF 圖片。'}), 400
 
     prompt = """
 請辨識這張旅遊圖片中的地標、景點或場景。
@@ -1164,16 +1437,11 @@ def recognize_image():
 回傳 JSON：{"landmarkName":"辨識名稱或未知","description":"辨識說明","similarSpots":[{"name":"景點名稱","emoji":"圖示","reason":"推薦原因","address":"完整地址"}]}
 """
     try:
-        result = generate_gemini_json(
-            prompt,
-            contents=[
-                prompt,
-                genai.types.Part.from_bytes(data=image_bytes, mime_type=image.mimetype),
-            ],
-        )
+        result = generate_groq_image_json(prompt, image_bytes, image.mimetype)
         if not isinstance(result, dict):
-            raise ValueError("Gemini returned an invalid image result.")
-        result.setdefault('similarSpots', [])
+            raise ValueError("Groq returned an invalid image result.")
+        if not isinstance(result.get('similarSpots'), list):
+            raise ValueError("Groq returned an invalid similar-spots list.")
         landmark_name = str(result.get('landmarkName') or '').strip()
         if landmark_name and landmark_name != '未知':
             result['mapsUrl'] = google_maps_search_url(landmark_name)
@@ -1182,13 +1450,23 @@ def recognize_image():
                 spot['mapsUrl'] = google_maps_search_url(
                     str(spot.get('address') or spot.get('name') or '').strip()
                 )
-        return jsonify({**result, 'source': 'gemini'})
+        return jsonify({**result, 'source': 'groq'})
+    except GroqAPIError as error:
+        app.logger.error("Groq image recognition returned HTTP %s.", error.status_code)
+        if error.status_code in {401, 403}:
+            return jsonify({'error': 'Groq API 金鑰無效或權限不足，請確認 GROQ_API_KEY。'}), 502
+        if error.status_code == 429:
+            return jsonify({'error': 'Groq API 請求過多或額度不足，請檢查 Groq 帳戶與速率限制。'}), 502
+        return jsonify({'error': f'Groq API 呼叫失敗（HTTP {error.status_code}），請稍後再試。'}), 502
     except RuntimeError:
-        app.logger.error("GEMINI_API_KEY is not configured.")
-        return jsonify({'error': 'Gemini API 尚未設定，請確認 GEMINI_API_KEY 環境變數。'}), 503
+        if not get_env("GROQ_API_KEY"):
+            app.logger.error("GROQ_API_KEY is not configured.")
+            return jsonify({'error': 'Groq API 尚未設定，請確認 GROQ_API_KEY 環境變數。'}), 503
+        app.logger.exception("Groq image recognition request failed.")
+        return jsonify({'error': '無法連線 Groq API，請檢查網路後再試。'}), 502
     except Exception:
-        app.logger.exception("Gemini image recognition failed.")
-        return jsonify({'error': 'AI 圖片辨識失敗，請稍後再試。'}), 502
+        app.logger.exception("Groq image recognition failed.")
+        return jsonify({'error': 'Groq 圖片辨識失敗，請稍後再試。'}), 502
 
 # ==========================================
 # 註冊功能 - 支援個人資料

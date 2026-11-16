@@ -141,7 +141,7 @@
                                 class="text-sm font-bold text-blue-600 hover:text-blue-800">分享</button>
                             <button @click="downloadItinerary" type="button"
                                 class="text-sm font-bold text-blue-600 hover:text-blue-800">下載</button>
-                            <span class="text-sm text-slate-500">可刪除不需要的行程日</span>
+                            <span class="text-sm text-slate-500">可拖曳或使用箭頭調整同一天的地點順序</span>
                         </div>
                     </div>
                     <div class="space-y-3">
@@ -158,12 +158,26 @@
                                 <div class="mt-3 space-y-2">
                                     <div v-for="(activity, activityIndex) in (day.activities || [])"
                                         :key="`${index}-${activityIndex}`"
-                                        class="rounded-xl bg-slate-50 px-3 py-2 text-sm">
+                                        draggable="true"
+                                        @dragstart="startActivityDrag(index, activityIndex, $event)"
+                                        @dragover.prevent="allowActivityDrop(index, $event)"
+                                        @drop.prevent="dropActivity(index, activityIndex)"
+                                        @dragend="clearActivityDrag"
+                                        :class="draggedActivity && draggedActivity.dayIndex === index
+                                            && draggedActivity.activityIndex === activityIndex
+                                            ? 'opacity-50' : ''"
+                                        class="rounded-xl bg-slate-50 px-3 py-2 text-sm cursor-grab active:cursor-grabbing">
                                         <div class="flex flex-wrap items-center gap-2">
+                                            <span aria-hidden="true" class="select-none text-slate-400">⠿</span>
                                             <span class="font-semibold text-slate-700">{{ activityLabel(activity)
                                                 }}</span>
+                                            <span v-if="activity.meal"
+                                                class="rounded-full bg-amber-100 px-2 py-0.5 text-xs text-amber-800">
+                                                {{ activity.meal }}
+                                            </span>
                                             <span v-if="activity.category"
-                                                class="rounded-full bg-blue-100 px-2 py-0.5 text-xs text-blue-700">
+                                                class="rounded-full px-2 py-0.5 text-xs"
+                                                :class="categoryBadgeClass(activity.category)">
                                                 {{ activity.category }}
                                             </span>
                                             <span v-if="activity.time" class="text-xs text-slate-500">{{ activity.time
@@ -171,7 +185,21 @@
                                             <a :href="activity.mapsUrl || activityMapsUrl(activity)" target="_blank"
                                                 rel="noopener"
                                                 class="text-xs font-bold text-blue-600 hover:text-blue-800">導航</a>
+                                            <button @click.stop="moveActivity(index, activityIndex, -1)"
+                                                :disabled="activityIndex === 0" type="button"
+                                                :aria-label="`將${activityLabel(activity)}上移`"
+                                                class="rounded px-1 text-slate-500 hover:bg-slate-200 disabled:cursor-not-allowed disabled:opacity-30">↑</button>
+                                            <button @click.stop="moveActivity(index, activityIndex, 1)"
+                                                :disabled="activityIndex === (day.activities || []).length - 1"
+                                                type="button" :aria-label="`將${activityLabel(activity)}下移`"
+                                                class="rounded px-1 text-slate-500 hover:bg-slate-200 disabled:cursor-not-allowed disabled:opacity-30">↓</button>
                                         </div>
+                                        <a v-if="activityIndex > 0"
+                                            :href="activityTransportUrl(day, activityIndex)" target="_blank"
+                                            rel="noopener"
+                                            class="mt-1 inline-block text-xs font-bold text-cyan-700 hover:text-cyan-900">
+                                            🚆 查詢上一站到此處的大眾運輸
+                                        </a>
                                         <p v-if="activity.address" class="text-xs text-slate-500 mt-1">{{
                                             activity.address }}</p>
                                         <p v-if="activity.description" class="text-xs text-slate-500 mt-1">{{
@@ -229,11 +257,13 @@
                 <div v-if="insights" class="grid grid-cols-1 lg:grid-cols-3 gap-6">
                     <div class="bg-white p-6 rounded-3xl shadow-md">
                         <h3 class="font-bold text-lg mb-4">天氣預報</h3>
+                        <p class="text-xs text-slate-500 mb-3">{{ insights.weatherStatus }}</p>
                         <div class="space-y-3">
                             <div v-for="weather in insights.weather" :key="weather.day"
                                 class="flex justify-between text-sm">
                                 <span>第 {{ weather.day }} 天 · {{ weather.date }} · {{ weather.condition }}</span>
-                                <span class="text-slate-500">{{ weather.temperature }} / 雨 {{ weather.rain }}%</span>
+                                <span class="text-slate-500">{{ weather.temperature }} /
+                                    {{ weatherRainLabel(weather) }}</span>
                             </div>
                         </div>
                     </div>
@@ -241,8 +271,30 @@
                         <h3 class="font-bold text-lg mb-4">交通與住宿</h3>
                         <p class="text-sm text-slate-600 mb-3">{{ insights.transport.summary }}</p>
                         <p class="text-sm text-slate-500 mb-4">{{ insights.transport.tip }}</p>
+                        <div class="flex flex-wrap gap-3 mb-4 text-xs font-bold">
+                            <a :href="insights.transport.tdxUrl" target="_blank" rel="noopener"
+                                class="text-cyan-700 hover:text-cyan-900">台灣 TDX 運輸資料（僅台灣）↗</a>
+                            <a :href="insights.transport.flightsUrl" target="_blank" rel="noopener"
+                                class="text-violet-700 hover:text-violet-900">查詢前往目的地的航班 ↗</a>
+                        </div>
                         <div class="border-t pt-3 text-sm">
-                            <p><strong>住宿區域：</strong>{{ insights.accommodation.area }}</p>
+                            <p class="font-bold mb-2">住宿區域建議（依每日行程）</p>
+                            <div v-if="dailyAccommodationAreas.length" class="space-y-3">
+                                <div v-for="recommendation in dailyAccommodationAreas" :key="recommendation.day">
+                                    <p class="font-semibold">
+                                        第 {{ recommendation.day }} 天 · {{ recommendation.area }}
+                                        <span v-if="recommendation.date" class="font-normal text-slate-500">
+                                            （{{ recommendation.date }}）
+                                        </span>
+                                    </p>
+                                    <p class="text-xs text-slate-500">{{ recommendation.reason }}</p>
+                                    <a :href="recommendation.searchUrl" target="_blank" rel="noopener"
+                                        class="text-xs font-bold text-blue-600 hover:text-blue-800">搜尋附近住宿 ↗</a>
+                                </div>
+                            </div>
+                            <p v-else class="text-sm text-slate-600">
+                                {{ insights.accommodation.area }} · {{ insights.accommodation.reason }}
+                            </p>
                             <p><strong>每晚預估：</strong>TWD {{ insights.accommodation.nightlyBudget }}</p>
                         </div>
                     </div>
@@ -299,6 +351,7 @@
         const replanMessage = Vue.ref('');
         const generationRecordId = Vue.ref(null);
         const isItineraryFavorite = Vue.ref(false);
+        const draggedActivity = Vue.ref(null);
         const activityLabel = (activity) => typeof activity === 'string'
             ? activity
             : (activity.name || activity.place || '未命名行程');
@@ -309,6 +362,35 @@
             const query = [activityPlace(activity), form.city].filter(Boolean).join(', ');
             return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(query)}`;
         };
+        const activityTransportUrl = (day, activityIndex) => {
+            const activities = day.activities || [];
+            const places = [activities[activityIndex - 1], activities[activityIndex]]
+                .map(activity => [activityPlace(activity), form.city].filter(Boolean).join(', '));
+            const params = new URLSearchParams({
+                api: '1',
+                origin: places[0],
+                destination: places[1],
+                travelmode: 'transit'
+            });
+            return `https://www.google.com/maps/dir/?${params.toString()}`;
+        };
+        const categoryBadgeClass = (category) => ({
+            '食物': 'bg-orange-100 text-orange-800',
+            '美食': 'bg-orange-100 text-orange-800',
+            'food': 'bg-orange-100 text-orange-800',
+            '活動': 'bg-purple-100 text-purple-800',
+            '購物': 'bg-pink-100 text-pink-800',
+            '景點': 'bg-emerald-100 text-emerald-800',
+            'attraction': 'bg-emerald-100 text-emerald-800',
+            '酒店': 'bg-indigo-100 text-indigo-800',
+            '住宿': 'bg-indigo-100 text-indigo-800',
+            'hotel': 'bg-indigo-100 text-indigo-800',
+            '交通': 'bg-cyan-100 text-cyan-800',
+            '其他': 'bg-slate-200 text-slate-700'
+        }[category] || 'bg-slate-200 text-slate-700');
+        const weatherRainLabel = (weather) => typeof weather.rain === 'number'
+            ? `雨 ${weather.rain}%`
+            : '降雨機率無資料';
         const itineraryMapsUrl = (day) => {
             const destinations = (day.activities || [])
                 .map(activity => [activityPlace(activity), form.city].filter(Boolean).join(', '))
@@ -322,6 +404,75 @@
             });
             if (destinations.length > 2) params.set('waypoints', destinations.slice(1, -1).join('|'));
             return `https://www.google.com/maps/dir/?${params.toString()}`;
+        };
+        const dailyAccommodationAreas = Vue.computed(() => (itinerary.value || []).map((day, index) => {
+            const activities = Array.isArray(day.activities) ? day.activities : [];
+            const mainAttraction = activities.find(activity =>
+                typeof activity !== 'string'
+                && ['景點', 'attraction'].includes(activity.category)
+            );
+            const mainPlace = mainAttraction ? activityPlace(mainAttraction) : '';
+            const area = typeof day.accommodationArea === 'string' && day.accommodationArea.trim()
+                ? day.accommodationArea.trim()
+                : (mainPlace ? `${form.city}・${mainPlace}附近` : `${form.city}市區`);
+            const reason = typeof day.accommodationReason === 'string' && day.accommodationReason.trim()
+                ? day.accommodationReason.trim()
+                : '以當日主要景點附近為住宿搜尋方向，減少往返交通。';
+            const query = encodeURIComponent(`hotels near ${area}, ${form.city}`);
+            return {
+                day: day.day || index + 1,
+                date: day.date || '',
+                area,
+                reason,
+                searchUrl: `https://www.google.com/maps/search/?api=1&query=${query}`
+            };
+        }));
+        const reorderActivity = (dayIndex, fromIndex, toIndex) => {
+            const day = itinerary.value?.[dayIndex];
+            const activities = day?.activities;
+            if (!Array.isArray(activities)
+                || fromIndex < 0
+                || toIndex < 0
+                || fromIndex >= activities.length
+                || toIndex >= activities.length
+                || fromIndex === toIndex) return;
+
+            const scheduledTimes = activities.map(activity =>
+                typeof activity === 'string' ? undefined : activity.time
+            );
+            const [activity] = activities.splice(fromIndex, 1);
+            activities.splice(toIndex, 0, activity);
+            activities.forEach((item, index) => {
+                if (typeof item === 'string') return;
+                if (scheduledTimes[index] !== undefined) item.time = scheduledTimes[index];
+                if (index > 0) item.transportUrl = activityTransportUrl(day, index);
+                else delete item.transportUrl;
+            });
+            day.mapsUrl = itineraryMapsUrl(day);
+            saveItinerary();
+        };
+        const moveActivity = (dayIndex, activityIndex, offset) => {
+            reorderActivity(dayIndex, activityIndex, activityIndex + offset);
+        };
+        const startActivityDrag = (dayIndex, activityIndex, event) => {
+            draggedActivity.value = { dayIndex, activityIndex };
+            event.dataTransfer.effectAllowed = 'move';
+            event.dataTransfer.setData('text/plain', `${dayIndex}:${activityIndex}`);
+        };
+        const allowActivityDrop = (dayIndex, event) => {
+            if (draggedActivity.value?.dayIndex === dayIndex) {
+                event.dataTransfer.dropEffect = 'move';
+            }
+        };
+        const dropActivity = (dayIndex, targetIndex) => {
+            const source = draggedActivity.value;
+            if (source && source.dayIndex === dayIndex) {
+                reorderActivity(dayIndex, source.activityIndex, targetIndex);
+            }
+            draggedActivity.value = null;
+        };
+        const clearActivityDrag = () => {
+            draggedActivity.value = null;
         };
         const itineraryText = () => {
             const lines = [`${form.city || 'AI'} 旅遊行程`, ''];
@@ -621,7 +772,6 @@
         };
 
         const saveItinerary = () => {
-            if (!isAuthenticated) return;
             localStorage.setItem(itineraryStorageKey, JSON.stringify({
                 itinerary: itinerary.value || [],
                 form: {
@@ -646,12 +796,8 @@
         const isFavorite = (spot) => favorites.value.some(f => f.name === spot.name);
 
         Vue.onMounted(() => {
-            const savedItinerary = isAuthenticated
-                ? localStorage.getItem(itineraryStorageKey)
-                : null;
-            if (!isAuthenticated) {
-                localStorage.removeItem(itineraryStorageKey);
-            } else if (savedItinerary) {
+            const savedItinerary = localStorage.getItem(itineraryStorageKey);
+            if (savedItinerary) {
                 try {
                     const parsedState = JSON.parse(savedItinerary);
                     // 相容舊版只保存行程陣列的格式。
@@ -696,7 +842,9 @@
         return {
             form, today, isGenerating, itinerary, insights, isReplanning, targetDay, changeReason, replanMessage,
             editInstruction, isItineraryFavorite, toggleItineraryFavorite, toggleFavorite, isFavorite, generateItinerary, replanItinerary, regenerateEditedItinerary, isRegenerating, activityLabel, activityMapsUrl, itineraryMapsUrl,
-            generationSecondsLeft, generationError,
+            activityTransportUrl, categoryBadgeClass, weatherRainLabel,
+            generationSecondsLeft, generationError, draggedActivity, startActivityDrag, allowActivityDrop,
+            dropActivity, clearActivityDrag, moveActivity, dailyAccommodationAreas,
             removeDay, shareItinerary, downloadItinerary
         };
         }

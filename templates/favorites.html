@@ -112,7 +112,8 @@
                             <div class="text-3xl mr-6">{{ spot.emoji || '📍' }}</div>
                             <div class="flex-1">
                                 <p class="font-bold">{{ spot.name }}</p>
-                                <p v-if="spot.tag" class="text-xs text-blue-500 mt-1">{{ spot.tag }}</p>
+                                <span v-if="spot.tag" class="mt-1 inline-block rounded-full px-2 py-0.5 text-xs"
+                                    :class="categoryBadgeClass(spot.category || spot.tag)">{{ spot.tag }}</span>
                             </div>
                             <button @click="selectSpot(spot)" type="button"
                                 class="text-sm font-bold text-blue-600 hover:text-blue-800 px-3"
@@ -229,8 +230,11 @@
                                             {{ typeof activity === 'string' ? activity : (activity.name ||
                                             activity.place) }}
                                         </span>
-                                        <span v-if="activity.category" class="ml-2 text-xs text-blue-600">{{
-                                            activity.category }}</span>
+                                        <span v-if="activity.category"
+                                            class="ml-2 inline-block rounded-full px-2 py-0.5 text-xs"
+                                            :class="categoryBadgeClass(activity.category)">
+                                            {{ activity.category }}
+                                        </span>
                                         <span v-if="activity.time" class="ml-2 text-xs text-slate-500">{{ activity.time
                                             }}</span>
                                         <a :href="activity.mapsUrl || activityMapsUrl(activity, selectedGeneration.record.context_data?.city)"
@@ -567,6 +571,20 @@
             const query = [place, city].filter(Boolean).join(', ');
             return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(query)}`;
         };
+        const categoryBadgeClass = (category) => ({
+            '食物': 'bg-orange-100 text-orange-800',
+            '美食': 'bg-orange-100 text-orange-800',
+            'food': 'bg-orange-100 text-orange-800',
+            '活動': 'bg-purple-100 text-purple-800',
+            '購物': 'bg-pink-100 text-pink-800',
+            '景點': 'bg-emerald-100 text-emerald-800',
+            'attraction': 'bg-emerald-100 text-emerald-800',
+            '酒店': 'bg-indigo-100 text-indigo-800',
+            '住宿': 'bg-indigo-100 text-indigo-800',
+            'hotel': 'bg-indigo-100 text-indigo-800',
+            '交通': 'bg-cyan-100 text-cyan-800',
+            '其他': 'bg-slate-200 text-slate-700'
+        }[category] || 'bg-slate-200 text-slate-700');
         const storageScope = {{ (user or 'guest') | tojson }};
         const recognitionStateKey = `my_travel_recognize_${storageScope}`;
         const getRecognitionImage = () => {
@@ -724,7 +742,7 @@
                 generationFavorites.value = data.favorites || [];
             }
         });
-        return { categories, activeCategory, favorites, generationFavorites, filteredFavorites, filteredGenerationFavorites, uploadedFiles, filteredUploadedFiles, selectedUploadFile, uploadTitle, isUploading, uploadError, selectedUploadDetails, deleteTarget, deleteTargetLabel, isDeleting, downloadTarget, regenerateTarget, regenerateConditions, isRegenerating, searchInput, searchQuery, runSearch, selectUploadFile, uploadFile, toggleUploadDetails, requestDelete, cancelDelete, confirmDelete, cancelDownload, downloadAsText, downloadAsPdf, closeDetails, openRegenerate, closeRegenerate, regenerateGeneration, featureGeneration, selectedSpot, selectedGeneration, getItinerary, mapsUrl, spotImage, activityMapsUrl, itineraryMapsUrl, selectSpot, selectGeneration, shareGeneration, downloadGeneration };
+        return { categories, activeCategory, favorites, generationFavorites, filteredFavorites, filteredGenerationFavorites, uploadedFiles, filteredUploadedFiles, selectedUploadFile, uploadTitle, isUploading, uploadError, selectedUploadDetails, deleteTarget, deleteTargetLabel, isDeleting, downloadTarget, regenerateTarget, regenerateConditions, isRegenerating, searchInput, searchQuery, runSearch, selectUploadFile, uploadFile, toggleUploadDetails, requestDelete, cancelDelete, confirmDelete, cancelDownload, downloadAsText, downloadAsPdf, closeDetails, openRegenerate, closeRegenerate, regenerateGeneration, featureGeneration, selectedSpot, selectedGeneration, getItinerary, mapsUrl, spotImage, activityMapsUrl, itineraryMapsUrl, categoryBadgeClass, selectSpot, selectGeneration, shareGeneration, downloadGeneration };
         }
         }).mount('#app');
     </script>
