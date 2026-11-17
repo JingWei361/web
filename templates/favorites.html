@@ -204,12 +204,27 @@
                             selectedSpot.rating }}</p>
                     </div>
                     <div v-else-if="selectedGeneration" class="space-y-4 pt-5">
+                        <div class="flex flex-wrap items-center gap-3 border-b border-slate-100 pb-4">
+                            <button @click="toggleGenerationReorderMode" type="button"
+                                class="text-sm font-bold text-emerald-600 hover:text-emerald-800">
+                                {{ isGenerationReordering ? '完成拖移' : '啟用拖移' }}
+                            </button>
+                            <button @click="saveGenerationChanges"
+                                :disabled="isSavingGeneration || !hasUnsavedGenerationChanges" type="button"
+                                class="text-sm font-bold text-blue-600 hover:text-blue-800 disabled:cursor-not-allowed disabled:text-slate-300">
+                                {{ isSavingGeneration ? '保存中...' : '保存行程' }}
+                            </button>
+                            <span class="text-xs text-slate-500">
+                                {{ hasUnsavedGenerationChanges ? '順序已變更，請保存行程' : '點擊「啟用拖移」後才能調整順序' }}
+                            </span>
+                        </div>
                         <div v-if="selectedGeneration.record.prompt" class="rounded-xl bg-blue-50 p-4">
                             <p class="mb-1 text-xs font-bold text-blue-600">行程需求</p>
                             <p class="text-sm text-slate-600">{{ selectedGeneration.record.prompt }}</p>
                         </div>
-                        <div v-if="getItinerary(selectedGeneration).length" class="space-y-3">
-                            <article v-for="day in getItinerary(selectedGeneration)" :key="day.day"
+                        <div v-if="selectedGenerationItinerary.length" class="space-y-3">
+                            <article v-for="(day, dayIndex) in selectedGenerationItinerary"
+                                :key="`${day.day}-${dayIndex}`"
                                 class="rounded-xl border border-slate-100 p-4">
                                 <div class="mb-2 flex flex-wrap items-center gap-x-3 gap-y-1">
                                     <p class="font-bold text-blue-600">第 {{ day.day }} 天</p>
@@ -224,8 +239,20 @@
                                     {{ day.description || day.introduction }}
                                 </p>
                                 <div v-if="(day.activities || []).length" class="mt-3 space-y-2">
-                                    <div v-for="activity in day.activities"
+                                    <div v-for="(activity, activityIndex) in day.activities"
+                                        :key="`${dayIndex}-${activityIndex}`"
+                                        :draggable="isGenerationReordering"
+                                        @dragstart="startGenerationActivityDrag(dayIndex, activityIndex, $event)"
+                                        @dragover.prevent="allowGenerationActivityDrop(dayIndex, $event)"
+                                        @drop.prevent="dropGenerationActivity(dayIndex, activityIndex)"
+                                        @dragend="clearGenerationActivityDrag"
+                                        :class="draggedGenerationActivity
+                                            && draggedGenerationActivity.dayIndex === dayIndex
+                                            && draggedGenerationActivity.activityIndex === activityIndex
+                                            ? 'opacity-50' : ''"
                                         class="rounded-lg bg-slate-50 px-3 py-2 text-sm">
+                                        <div class="flex flex-wrap items-center gap-2">
+                                        <span aria-hidden="true" class="select-none text-slate-400">⠿</span>
                                         <span class="font-semibold text-slate-600">
                                             {{ typeof activity === 'string' ? activity : (activity.name ||
                                             activity.place) }}
@@ -239,7 +266,17 @@
                                             }}</span>
                                         <a :href="activity.mapsUrl || activityMapsUrl(activity, selectedGeneration.record.context_data?.city)"
                                             target="_blank" rel="noopener"
-                                            class="float-right text-xs font-bold text-blue-600 hover:text-blue-800">導航</a>
+                                            class="text-xs font-bold text-blue-600 hover:text-blue-800">導航</a>
+                                        <button @click.stop="moveGenerationActivity(dayIndex, activityIndex, -1)"
+                                            :disabled="!isGenerationReordering || activityIndex === 0" type="button"
+                                            class="rounded px-1 text-slate-500 hover:bg-slate-200 disabled:cursor-not-allowed disabled:opacity-30"
+                                            :aria-label="`將第${day.day}天的景點上移`">↑</button>
+                                        <button @click.stop="moveGenerationActivity(dayIndex, activityIndex, 1)"
+                                            :disabled="!isGenerationReordering || activityIndex === day.activities.length - 1"
+                                            type="button"
+                                            class="rounded px-1 text-slate-500 hover:bg-slate-200 disabled:cursor-not-allowed disabled:opacity-30"
+                                            :aria-label="`將第${day.day}天的景點下移`">↓</button>
+                                        </div>
                                         <p v-if="activity.address" class="mt-1 text-xs text-slate-500">{{
                                             activity.address }}</p>
                                     </div>
@@ -247,6 +284,52 @@
                             </article>
                         </div>
                         <p v-else class="text-sm text-slate-500">這筆行程沒有可顯示的詳細內容。</p>
+                        <div v-if="selectedGenerationInsights" class="grid gap-4 border-t border-slate-100 pt-4">
+                            <section class="rounded-xl bg-sky-50 p-4">
+                                <h4 class="mb-2 font-bold text-slate-800">天氣預報</h4>
+                                <p class="mb-3 text-xs text-slate-500">
+                                    {{ selectedGenerationInsights.weatherStatus || '天氣資料' }}
+                                </p>
+                                <div class="space-y-2">
+                                    <div v-for="weather in (selectedGenerationInsights.weather || [])"
+                                        :key="weather.day" class="flex justify-between gap-3 text-sm">
+                                        <span>第 {{ weather.day }} 天 · {{ weather.date }} · {{ weather.condition }}</span>
+                                        <span class="whitespace-nowrap text-slate-500">
+                                            {{ weather.temperature }} / {{ weatherRainLabel(weather) }}
+                                        </span>
+                                    </div>
+                                </div>
+                            </section>
+                            <section class="rounded-xl bg-emerald-50 p-4">
+                                <h4 class="mb-2 font-bold text-slate-800">交通與住宿</h4>
+                                <p class="text-sm text-slate-600">
+                                    {{ selectedGenerationInsights.transport?.summary }}
+                                </p>
+                                <p class="mt-2 text-sm text-slate-500">
+                                    {{ selectedGenerationInsights.transport?.tip }}
+                                </p>
+                                <a v-if="selectedGenerationInsights.transport?.flightsUrl"
+                                    :href="selectedGenerationInsights.transport.flightsUrl" target="_blank"
+                                    rel="noopener"
+                                    class="mt-3 inline-block text-xs font-bold text-blue-600 hover:text-blue-800">
+                                    查詢前往目的地的航班 ↗
+                                </a>
+                                <div v-if="selectedGenerationInsights.accommodation"
+                                    class="mt-3 border-t border-emerald-200 pt-3 text-sm">
+                                    <p class="font-bold">住宿區域：{{ selectedGenerationInsights.accommodation.area }}</p>
+                                    <p class="mt-1 text-slate-500">
+                                        {{ selectedGenerationInsights.accommodation.reason }}
+                                    </p>
+                                    <p class="mt-1">
+                                        <strong>每晚預估：</strong>
+                                        TWD {{ selectedGenerationInsights.accommodation.nightlyBudget }}
+                                    </p>
+                                </div>
+                            </section>
+                        </div>
+                        <p v-else-if="generationInsightsError" class="text-sm text-red-600">
+                            {{ generationInsightsError }}
+                        </p>
                         <div class="flex gap-3 border-t border-slate-100 pt-4">
                             <button @click="shareGeneration(selectedGeneration)" type="button"
                                 class="rounded-xl bg-blue-600 px-4 py-2 text-sm font-bold text-white hover:bg-blue-700">複製行程</button>
@@ -336,6 +419,13 @@
         const generationFavorites = Vue.ref([]);
         const selectedSpot = Vue.ref(null);
         const selectedGeneration = Vue.ref(null);
+        const selectedGenerationItinerary = Vue.ref([]);
+        const selectedGenerationInsights = Vue.ref(null);
+        const generationInsightsError = Vue.ref('');
+        const isGenerationReordering = Vue.ref(false);
+        const hasUnsavedGenerationChanges = Vue.ref(false);
+        const isSavingGeneration = Vue.ref(false);
+        const draggedGenerationActivity = Vue.ref(null);
         const uploadedFiles = Vue.ref([]);
         const selectedUploadFile = Vue.ref(null);
         const uploadTitle = Vue.ref('');
@@ -439,6 +529,8 @@
             selectedUploadDetails.value = file;
             selectedSpot.value = null;
             selectedGeneration.value = null;
+            selectedGenerationInsights.value = null;
+            generationInsightsError.value = '';
         };
         const filteredFavorites = Vue.computed(() => {
             const query = searchQuery.value.trim().toLowerCase();
@@ -557,6 +649,65 @@
                     isRegenerating.value = false;
                 }
             };
+            const saveGenerationChanges = async () => {
+                const item = selectedGeneration.value;
+                if (!item || !hasUnsavedGenerationChanges.value || isSavingGeneration.value) return;
+                const record = item.record || {};
+                const context = record.context_data || {};
+                isSavingGeneration.value = true;
+                try {
+                    const saveResponse = await fetch('/api/generations', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            city: context.city || record.title?.replace(/ 行程.*$/, '') || '',
+                            days: selectedGenerationItinerary.value.length,
+                            startDate: context.startDate,
+                            budget: context.budget,
+                            style: context.style || 'balanced',
+                            conditions: context.conditions || '',
+                            parentGenerationRecordId: record.id,
+                            itinerary: selectedGenerationItinerary.value
+                        })
+                    });
+                    const saved = await saveResponse.json().catch(() => ({}));
+                    if (!saveResponse.ok) throw new Error(saved.error || '行程保存失敗。');
+
+                    const favoriteResponse = await fetch('/api/generation-favorites', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ generationRecordId: saved.record.id })
+                    });
+                    const favoriteData = await favoriteResponse.json().catch(() => ({}));
+                    if (!favoriteResponse.ok) throw new Error(favoriteData.error || '新行程收藏失敗。');
+
+                    const deleteResponse = await fetch(
+                        `/api/generation-favorites/${item.generation_record_id}`,
+                        { method: 'DELETE' }
+                    );
+                    if (!deleteResponse.ok) {
+                        const deleteData = await deleteResponse.json().catch(() => ({}));
+                        throw new Error(deleteData.error || '原行程收藏替換失敗。');
+                    }
+
+                    await loadGenerationFavorites();
+                    const replacement = generationFavorites.value.find(
+                        favorite => favorite.generation_record_id === saved.record.id
+                    );
+                    if (replacement) {
+                        selectedGeneration.value = replacement;
+                        selectedGenerationItinerary.value = cloneItinerary(getItinerary(replacement));
+                        loadGenerationInsights(replacement);
+                    }
+                    hasUnsavedGenerationChanges.value = false;
+                    isGenerationReordering.value = false;
+                    alert('行程已保存，原收藏內容已更新。');
+                } catch (error) {
+                    alert(error.message || '行程保存失敗，請稍後再試。');
+                } finally {
+                    isSavingGeneration.value = false;
+                }
+            };
         const getItinerary = (item) => {
             try {
                 const content = item.record.generated_content;
@@ -566,6 +717,86 @@
             } catch (error) {
                 return [];
             }
+        };
+        const weatherRainLabel = (weather) => typeof weather.rain === 'number'
+            ? `雨 ${weather.rain}%`
+            : '降雨機率無資料';
+        const loadGenerationInsights = async (item) => {
+            const context = item?.record?.context_data || {};
+            const city = String(context.city || '').trim();
+            if (!city) {
+                selectedGenerationInsights.value = null;
+                generationInsightsError.value = '這筆收藏缺少目的地資料，無法載入天氣與交通資訊。';
+                return;
+            }
+            generationInsightsError.value = '';
+            selectedGenerationInsights.value = null;
+            try {
+                const response = await fetch('/api/trip_insights', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        city,
+                        days: Number.isInteger(context.days) ? context.days : getItinerary(item).length,
+                        startDate: context.startDate,
+                        budget: context.budget,
+                        conditions: context.conditions || ''
+                    })
+                });
+                const data = await response.json().catch(() => ({}));
+                if (!response.ok) throw new Error(data.error || '載入旅遊資訊失敗。');
+                selectedGenerationInsights.value = data;
+            } catch (error) {
+                generationInsightsError.value = error.message || '載入旅遊資訊失敗，請稍後再試。';
+            }
+        };
+        const cloneItinerary = itinerary => JSON.parse(JSON.stringify(itinerary || []));
+        const reorderGenerationActivity = (dayIndex, fromIndex, toIndex) => {
+            if (!isGenerationReordering.value) return;
+            const day = selectedGenerationItinerary.value[dayIndex];
+            const activities = day?.activities;
+            if (!Array.isArray(activities)
+                || fromIndex < 0
+                || toIndex < 0
+                || fromIndex >= activities.length
+                || toIndex >= activities.length
+                || fromIndex === toIndex) return;
+
+            const [activity] = activities.splice(fromIndex, 1);
+            activities.splice(toIndex, 0, activity);
+            hasUnsavedGenerationChanges.value = true;
+        };
+        const moveGenerationActivity = (dayIndex, activityIndex, offset) => {
+            reorderGenerationActivity(dayIndex, activityIndex, activityIndex + offset);
+        };
+        const startGenerationActivityDrag = (dayIndex, activityIndex, event) => {
+            if (!isGenerationReordering.value) {
+                event.preventDefault();
+                return;
+            }
+            draggedGenerationActivity.value = { dayIndex, activityIndex };
+            event.dataTransfer.effectAllowed = 'move';
+            event.dataTransfer.setData('text/plain', `${dayIndex}:${activityIndex}`);
+        };
+        const allowGenerationActivityDrop = (dayIndex, event) => {
+            if (draggedGenerationActivity.value?.dayIndex === dayIndex) {
+                event.dataTransfer.dropEffect = 'move';
+            }
+        };
+        const dropGenerationActivity = (dayIndex, targetIndex) => {
+            if (!isGenerationReordering.value) return;
+            const source = draggedGenerationActivity.value;
+            if (source && source.dayIndex === dayIndex) {
+                reorderGenerationActivity(dayIndex, source.activityIndex, targetIndex);
+            }
+            draggedGenerationActivity.value = null;
+        };
+        const clearGenerationActivityDrag = () => {
+            draggedGenerationActivity.value = null;
+        };
+        const toggleGenerationReorderMode = () => {
+            isGenerationReordering.value = !isGenerationReordering.value;
+            if (!isGenerationReordering.value) clearGenerationActivityDrag();
         };
         const mapsUrl = (place, city = '') => {
             const query = [place, city].filter(Boolean).join(', ');
@@ -627,7 +858,10 @@
             const record = item.record || {};
             const context = record.context_data || {};
             const lines = [`${record.title || context.city || 'AI'} 旅遊行程`, ''];
-            getItinerary(item).forEach(day => {
+            const itinerary = item === selectedGeneration.value
+                ? selectedGenerationItinerary.value
+                : getItinerary(item);
+            itinerary.forEach(day => {
                 lines.push(`第 ${day.day} 天｜${day.date || ''}｜${day.title || ''}`);
                 if (day.description || day.introduction) lines.push(day.description || day.introduction);
                 (day.activities || []).forEach(activity => {
@@ -713,17 +947,26 @@
         };
         const selectGeneration = (item) => {
             selectedGeneration.value = item;
+            selectedGenerationItinerary.value = cloneItinerary(getItinerary(item));
+            loadGenerationInsights(item);
+            isGenerationReordering.value = false;
+            hasUnsavedGenerationChanges.value = false;
+            clearGenerationActivityDrag();
             selectedSpot.value = null;
             selectedUploadDetails.value = null;
         };
         const selectSpot = (spot) => {
             selectedSpot.value = spot;
             selectedGeneration.value = null;
+            selectedGenerationInsights.value = null;
+            generationInsightsError.value = '';
             selectedUploadDetails.value = null;
         };
         const closeDetails = () => {
             selectedSpot.value = null;
             selectedGeneration.value = null;
+            selectedGenerationInsights.value = null;
+            generationInsightsError.value = '';
             selectedUploadDetails.value = null;
         };
         Vue.onMounted(async () => {
@@ -742,7 +985,23 @@
                 generationFavorites.value = data.favorites || [];
             }
         });
-        return { categories, activeCategory, favorites, generationFavorites, filteredFavorites, filteredGenerationFavorites, uploadedFiles, filteredUploadedFiles, selectedUploadFile, uploadTitle, isUploading, uploadError, selectedUploadDetails, deleteTarget, deleteTargetLabel, isDeleting, downloadTarget, regenerateTarget, regenerateConditions, isRegenerating, searchInput, searchQuery, runSearch, selectUploadFile, uploadFile, toggleUploadDetails, requestDelete, cancelDelete, confirmDelete, cancelDownload, downloadAsText, downloadAsPdf, closeDetails, openRegenerate, closeRegenerate, regenerateGeneration, featureGeneration, selectedSpot, selectedGeneration, getItinerary, mapsUrl, spotImage, activityMapsUrl, itineraryMapsUrl, categoryBadgeClass, selectSpot, selectGeneration, shareGeneration, downloadGeneration };
+        return {
+            categories, activeCategory, favorites, generationFavorites, filteredFavorites,
+            filteredGenerationFavorites, uploadedFiles, filteredUploadedFiles, selectedUploadFile,
+            uploadTitle, isUploading, uploadError, selectedUploadDetails, deleteTarget,
+            deleteTargetLabel, isDeleting, downloadTarget, regenerateTarget, regenerateConditions,
+            isRegenerating, searchInput, searchQuery, runSearch, selectUploadFile, uploadFile,
+            toggleUploadDetails, requestDelete, cancelDelete, confirmDelete, cancelDownload,
+            downloadAsText, downloadAsPdf, closeDetails, openRegenerate, closeRegenerate,
+            regenerateGeneration, featureGeneration, selectedSpot, selectedGeneration,
+            selectedGenerationItinerary, selectedGenerationInsights, generationInsightsError,
+            weatherRainLabel, isGenerationReordering, hasUnsavedGenerationChanges,
+            isSavingGeneration, draggedGenerationActivity, toggleGenerationReorderMode,
+            startGenerationActivityDrag, allowGenerationActivityDrop, dropGenerationActivity,
+            clearGenerationActivityDrag, moveGenerationActivity, saveGenerationChanges,
+            getItinerary, mapsUrl, spotImage, activityMapsUrl, itineraryMapsUrl,
+            categoryBadgeClass, selectSpot, selectGeneration, shareGeneration, downloadGeneration
+        };
         }
         }).mount('#app');
     </script>
