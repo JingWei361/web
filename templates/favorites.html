@@ -205,17 +205,23 @@
                     </div>
                     <div v-else-if="selectedGeneration" class="space-y-4 pt-5">
                         <div class="flex flex-wrap items-center gap-3 border-b border-slate-100 pb-4">
-                            <button @click="toggleGenerationReorderMode" type="button"
+                            <button v-if="!isGenerationReordering" @click="startGenerationEditing" type="button"
                                 class="text-sm font-bold text-emerald-600 hover:text-emerald-800">
-                                {{ isGenerationReordering ? '完成拖移' : '啟用拖移' }}
+                                編輯
                             </button>
-                            <button @click="saveGenerationChanges"
+                            <button v-else @click="cancelGenerationEditing" type="button"
+                                class="text-sm font-bold text-slate-600 hover:text-slate-800">
+                                取消編輯
+                            </button>
+                            <button v-if="isGenerationReordering" @click="saveGenerationChanges"
                                 :disabled="isSavingGeneration || !hasUnsavedGenerationChanges" type="button"
                                 class="text-sm font-bold text-blue-600 hover:text-blue-800 disabled:cursor-not-allowed disabled:text-slate-300">
-                                {{ isSavingGeneration ? '保存中...' : '保存行程' }}
+                                {{ isSavingGeneration ? '保存中...' : '完成保存' }}
                             </button>
                             <span class="text-xs text-slate-500">
-                                {{ hasUnsavedGenerationChanges ? '順序已變更，請保存行程' : '點擊「啟用拖移」後才能調整順序' }}
+                                {{ isGenerationReordering
+                                    ? (hasUnsavedGenerationChanges ? '內容已變更，請完成保存' : '可調整順序或刪除景點')
+                                    : '點擊「編輯」後才能調整順序或刪除景點' }}
                             </span>
                         </div>
                         <div v-if="selectedGeneration.record.prompt" class="rounded-xl bg-blue-50 p-4">
@@ -276,6 +282,10 @@
                                             type="button"
                                             class="rounded px-1 text-slate-500 hover:bg-slate-200 disabled:cursor-not-allowed disabled:opacity-30"
                                             :aria-label="`將第${day.day}天的景點下移`">↓</button>
+                                        <button @click.stop="requestDeleteGenerationActivity(dayIndex, activityIndex)"
+                                            v-if="isGenerationReordering" type="button"
+                                            class="rounded px-1 text-red-500 hover:bg-red-100"
+                                            :aria-label="`刪除第${day.day}天的景點`">刪除</button>
                                         </div>
                                         <p v-if="activity.address" class="mt-1 text-xs text-slate-500">{{
                                             activity.address }}</p>
@@ -353,6 +363,26 @@
                             {{ isDeleting ? '刪除中...' : '確認永久刪除' }}
                         </button>
                     </div>
+
+                </div>
+            </div>
+
+            <div v-if="generationActivityDeleteTarget"
+                class="fixed inset-0 z-[60] flex items-center justify-center bg-slate-900/50 px-4"
+                @click.self="cancelDeleteGenerationActivity">
+                <div class="w-full max-w-md rounded-2xl bg-white p-6 shadow-2xl">
+                    <h3 class="text-xl font-bold text-red-600">永久刪除</h3>
+                    <p class="mt-3 text-slate-600">刪除後無法恢復，確定要刪除這個生成景點嗎？</p>
+                    <div class="mt-6 flex justify-end gap-3">
+                        <button @click="cancelDeleteGenerationActivity" type="button"
+                            class="rounded-xl border border-slate-200 px-4 py-2 font-bold text-slate-600 hover:bg-slate-50">
+                            取消
+                        </button>
+                        <button @click="confirmDeleteGenerationActivity" type="button"
+                            class="rounded-xl bg-red-600 px-4 py-2 font-bold text-white hover:bg-red-700">
+                            確認永久刪除
+                        </button>
+                    </div>
                 </div>
             </div>
 
@@ -426,6 +456,8 @@
         const hasUnsavedGenerationChanges = Vue.ref(false);
         const isSavingGeneration = Vue.ref(false);
         const draggedGenerationActivity = Vue.ref(null);
+        const generationActivityDeleteTarget = Vue.ref(null);
+        const generationEditSnapshot = Vue.ref(null);
         const uploadedFiles = Vue.ref([]);
         const selectedUploadFile = Vue.ref(null);
         const uploadTitle = Vue.ref('');
@@ -701,6 +733,7 @@
                     }
                     hasUnsavedGenerationChanges.value = false;
                     isGenerationReordering.value = false;
+                    generationEditSnapshot.value = null;
                     alert('行程已保存，原收藏內容已更新。');
                 } catch (error) {
                     alert(error.message || '行程保存失敗，請稍後再試。');
@@ -762,12 +795,40 @@
                 || toIndex >= activities.length
                 || fromIndex === toIndex) return;
 
+            const scheduledTimes = activities.map(activity =>
+                typeof activity === 'string' ? undefined : activity.time
+            );
             const [activity] = activities.splice(fromIndex, 1);
             activities.splice(toIndex, 0, activity);
+            activities.forEach((item, index) => {
+                if (typeof item === 'string') return;
+                if (scheduledTimes[index] !== undefined) item.time = scheduledTimes[index];
+            });
+            day.mapsUrl = itineraryMapsUrl(
+                day,
+                selectedGeneration.value?.record?.context_data?.city || ''
+            );
             hasUnsavedGenerationChanges.value = true;
         };
         const moveGenerationActivity = (dayIndex, activityIndex, offset) => {
             reorderGenerationActivity(dayIndex, activityIndex, activityIndex + offset);
+        };
+        const requestDeleteGenerationActivity = (dayIndex, activityIndex) => {
+            if (!isGenerationReordering.value) return;
+            generationActivityDeleteTarget.value = { dayIndex, activityIndex };
+        };
+        const cancelDeleteGenerationActivity = () => {
+            generationActivityDeleteTarget.value = null;
+        };
+        const confirmDeleteGenerationActivity = () => {
+            const target = generationActivityDeleteTarget.value;
+            if (!target) return;
+            const activities = selectedGenerationItinerary.value[target.dayIndex]?.activities;
+            if (Array.isArray(activities)) {
+                activities.splice(target.activityIndex, 1);
+                hasUnsavedGenerationChanges.value = true;
+            }
+            cancelDeleteGenerationActivity();
         };
         const startGenerationActivityDrag = (dayIndex, activityIndex, event) => {
             if (!isGenerationReordering.value) {
@@ -794,9 +855,22 @@
         const clearGenerationActivityDrag = () => {
             draggedGenerationActivity.value = null;
         };
-        const toggleGenerationReorderMode = () => {
-            isGenerationReordering.value = !isGenerationReordering.value;
-            if (!isGenerationReordering.value) clearGenerationActivityDrag();
+        const startGenerationEditing = () => {
+            if (isGenerationReordering.value) return;
+            generationEditSnapshot.value = cloneItinerary(selectedGenerationItinerary.value);
+            isGenerationReordering.value = true;
+            hasUnsavedGenerationChanges.value = false;
+        };
+        const cancelGenerationEditing = () => {
+            if (!isGenerationReordering.value) return;
+            if (generationEditSnapshot.value) {
+                selectedGenerationItinerary.value = cloneItinerary(generationEditSnapshot.value);
+            }
+            generationEditSnapshot.value = null;
+            isGenerationReordering.value = false;
+            hasUnsavedGenerationChanges.value = false;
+            clearGenerationActivityDrag();
+            cancelDeleteGenerationActivity();
         };
         const mapsUrl = (place, city = '') => {
             const query = [place, city].filter(Boolean).join(', ');
@@ -951,6 +1025,8 @@
             loadGenerationInsights(item);
             isGenerationReordering.value = false;
             hasUnsavedGenerationChanges.value = false;
+            generationActivityDeleteTarget.value = null;
+            generationEditSnapshot.value = null;
             clearGenerationActivityDrag();
             selectedSpot.value = null;
             selectedUploadDetails.value = null;
@@ -960,6 +1036,7 @@
             selectedGeneration.value = null;
             selectedGenerationInsights.value = null;
             generationInsightsError.value = '';
+            generationActivityDeleteTarget.value = null;
             selectedUploadDetails.value = null;
         };
         const closeDetails = () => {
@@ -967,6 +1044,7 @@
             selectedGeneration.value = null;
             selectedGenerationInsights.value = null;
             generationInsightsError.value = '';
+            generationActivityDeleteTarget.value = null;
             selectedUploadDetails.value = null;
         };
         Vue.onMounted(async () => {
@@ -996,7 +1074,9 @@
             regenerateGeneration, featureGeneration, selectedSpot, selectedGeneration,
             selectedGenerationItinerary, selectedGenerationInsights, generationInsightsError,
             weatherRainLabel, isGenerationReordering, hasUnsavedGenerationChanges,
-            isSavingGeneration, draggedGenerationActivity, toggleGenerationReorderMode,
+            isSavingGeneration, draggedGenerationActivity, generationActivityDeleteTarget,
+            startGenerationEditing, cancelGenerationEditing, requestDeleteGenerationActivity,
+            cancelDeleteGenerationActivity, confirmDeleteGenerationActivity,
             startGenerationActivityDrag, allowGenerationActivityDrop, dropGenerationActivity,
             clearGenerationActivityDrag, moveGenerationActivity, saveGenerationChanges,
             getItinerary, mapsUrl, spotImage, activityMapsUrl, itineraryMapsUrl,
