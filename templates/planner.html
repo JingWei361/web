@@ -124,8 +124,8 @@
             <div v-if="isGenerating || itinerary || insights || generationError" class="space-y-6">
                 <div v-if="isGenerating || generationError"
                     class="bg-white p-8 rounded-3xl shadow-md text-center text-slate-500">
-                    AI 正在整理行程重新安排中<span class="loading-dots"></span>
                     <p v-if="generationError" class="mt-4 text-sm font-semibold text-red-600">{{ generationError }}</p>
+                    <p v-else>AI 正在整理行程重新安排中<span class="loading-dots"></span></p>
                 </div>
 
                 {% raw %}
@@ -272,8 +272,6 @@
                         <p class="text-sm text-slate-600 mb-3">{{ insights.transport.summary }}</p>
                         <p class="text-sm text-slate-500 mb-4">{{ insights.transport.tip }}</p>
                         <div class="flex flex-wrap gap-3 mb-4 text-xs font-bold">
-                            <a :href="insights.transport.tdxUrl" target="_blank" rel="noopener"
-                                class="text-cyan-700 hover:text-cyan-900">台灣 TDX 運輸資料（僅台灣）↗</a>
                             <a :href="insights.transport.flightsUrl" target="_blank" rel="noopener"
                                 class="text-violet-700 hover:text-violet-900">查詢前往目的地的航班 ↗</a>
                         </div>
@@ -727,10 +725,14 @@
             isRegenerating.value = true;
             generationError.value = '';
             replanMessage.value = '';
+            let timeoutId;
             try {
+                const controller = new AbortController();
+                timeoutId = window.setTimeout(() => controller.abort(), 90000);
                 const response = await fetch('/api/regenerate_itinerary', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
+                    signal: controller.signal,
                     body: JSON.stringify({
                         city: form.city,
                         days: form.days,
@@ -751,16 +753,18 @@
                 isItineraryFavorite.value = false;
                 generationRecordId.value = null;
                 saveItinerary();
-                await Promise.all([
-                    loadInsights(),
-                    saveGenerationRecord().then(record => {
+                saveGenerationRecord()
+                    .then(record => {
                         generationRecordId.value = record ? record.id : null;
                     })
-                ]);
+                    .catch(error => console.error('儲存行程紀錄失敗:', error));
                 replanMessage.value = '已根據你的修改說明重新生成行程。';
             } catch (error) {
-                generationError.value = error.message || 'AI 重新生成失敗，請稍後再試。';
+                generationError.value = error.name === 'AbortError'
+                    ? '修改行程超過 90 秒，已停止等待。請稍後重試，或減少修改範圍。'
+                    : error.message || 'AI 重新生成失敗，請稍後再試。';
             } finally {
+                window.clearTimeout(timeoutId);
                 isRegenerating.value = false;
             }
         };

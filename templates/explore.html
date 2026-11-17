@@ -203,7 +203,7 @@
             errorMessage.value = '';
             try {
                 if (isAuthenticated) {
-                    await fetch('/api/search_history', {
+                    fetch('/api/search_history', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({
@@ -215,7 +215,7 @@
                                 condition: conditionInput.value.trim()
                             }
                         })
-                    });
+                    }).catch(error => console.warn('儲存搜尋紀錄失敗:', error));
                 }
                 const params = new URLSearchParams({
                     category: currentCategory.value,

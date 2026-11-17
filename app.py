@@ -53,6 +53,7 @@ GEMINI_FALLBACK_MODEL = "gemini-3.5-flash-lite"
 GEMINI_MODEL = get_env("GEMINI_MODEL", "REACT_APP_GEMINI_MODEL", GEMINI_FALLBACK_MODEL)
 GEMINI_TIMEOUT_MS = int(get_env("GEMINI_TIMEOUT_MS", "REACT_APP_GEMINI_TIMEOUT_MS", "60000"))
 GROQ_VISION_MODEL = get_env("GROQ_VISION_MODEL", default="qwen/qwen3.8-27b")
+OPENROUTER_MODEL = get_env("OPENROUTER_MODEL", default="inclusionai/ling-3.2-flash:free")
 ROUTE_OPTIMIZATION_GUIDANCE = """
 路線順暢是重要要求：先把地理位置相近的地點排在同一時段或同一天，沿著同一方向逐區移動；
 避免景點間來回折返、跨區後又返回原區、重複造訪同一地點。依實際合理的交通時間排序，
@@ -71,7 +72,7 @@ DAILY_ACCOMMODATION_GUIDANCE = """
 """
 OPEN_METEO_GEOCODING_URL = "https://geocoding-api.open-meteo.com/v1/search"
 OPEN_METEO_FORECAST_URL = "https://api.open-meteo.com/v1/forecast"
-TDX_REFERENCE_URL = "https://tdx.transportdata.tw/api-service/swagger"
+OPENROUTER_CHAT_COMPLETIONS_URL = "https://openrouter.ai/api/v1/chat/completions"
 UPLOAD_BUCKET = 'user-files'
 
 spots = [
@@ -156,6 +157,72 @@ def generate_gemini_json(prompt: str, contents: Any = None) -> Any:
     if not response.text:
         raise ValueError("Gemini returned an empty response.")
     return parse_model_json(response.text)
+
+
+class OpenRouterAPIError(RuntimeError):
+    def __init__(self, status_code: int) -> None:
+        self.status_code = status_code
+        super().__init__(f"OpenRouter API returned HTTP {status_code}.")
+
+
+def generate_openrouter_json(prompt: str, max_tokens: int = 2048) -> Any:
+    api_key = get_env("OPENROUTER_API_KEY")
+    if not api_key:
+        raise RuntimeError("OPENROUTER_API_KEY is not configured.")
+
+    payload = json.dumps({
+        "model": OPENROUTER_MODEL,
+        "messages": [
+            {
+                "role": "system",
+                "content": "你是旅遊規劃助手。只回傳有效 JSON，不要 Markdown 或額外文字。",
+            },
+            {"role": "user", "content": prompt},
+        ],
+        "response_format": {"type": "json_object"},
+        "temperature": 0.2,
+        "max_tokens": max_tokens,
+        "stream": False,
+    }).encode("utf-8")
+    api_request = Request(
+        OPENROUTER_CHAT_COMPLETIONS_URL,
+        data=payload,
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+            "X-Title": "AI Travel Assistant",
+            "User-Agent": "AITravelAssistant/1.0",
+        },
+        method="POST",
+    )
+    try:
+        with urlopen(api_request, timeout=60) as response:
+            response_data = json.loads(response.read())
+    except HTTPError as error:
+        raise OpenRouterAPIError(error.code) from error
+    except (URLError, TimeoutError) as error:
+        raise RuntimeError("Could not connect to the OpenRouter API.") from error
+
+    choices = response_data.get("choices") or []
+    message = choices[0].get("message") if choices else None
+    output_text = message.get("content") if isinstance(message, dict) else None
+    if not isinstance(output_text, str) or not output_text.strip():
+        raise ValueError("OpenRouter returned no recommendation result.")
+    return parse_model_json(output_text)
+
+
+def generate_planner_json(prompt: str) -> tuple[Any, str]:
+    try:
+        return generate_gemini_json(prompt), "gemini"
+    except RuntimeError as error:
+        if "GEMINI_API_KEY is not configured" not in str(error):
+            raise
+        app.logger.warning("Gemini API key is not configured; using OpenRouter for itinerary generation.")
+    except genai_errors.ServerError as error:
+        if error.code != 503:
+            raise
+        app.logger.warning("Gemini returned HTTP 503; retrying itinerary generation with OpenRouter.")
+    return generate_openrouter_json(prompt, max_tokens=8192), "openrouter"
 
 
 class GroqAPIError(RuntimeError):
@@ -287,8 +354,18 @@ def get_weather_forecast(
     ]
     last_date = (start_date + timedelta(days=days - 1)).date()
     today = datetime.now().date()
-    if start_date.date() < today or last_date > today + timedelta(days=15):
-        return weather, "Open-Meteo 僅支援今天起 16 天內的預報；此日期範圍無法取得預報。"
+    forecast_limit = today + timedelta(days=15)
+    if start_date.date() < today:
+        return weather, ""
+    if start_date.date() > forecast_limit:
+        for day in weather:
+            day["condition"] = "超出預測範圍"
+        return weather, ""
+
+    forecast_end = min(last_date, forecast_limit)
+    for day in weather:
+        if datetime.strptime(day["date"], "%Y-%m-%d").date() > forecast_limit:
+            day["condition"] = "超出預測範圍"
 
     try:
         geocoding = open_meteo_get_json(OPEN_METEO_GEOCODING_URL, {
@@ -310,7 +387,7 @@ def get_weather_forecast(
             ),
             "timezone": "auto",
             "start_date": start_date.strftime("%Y-%m-%d"),
-            "end_date": last_date.strftime("%Y-%m-%d"),
+            "end_date": forecast_end.strftime("%Y-%m-%d"),
         })
         daily = forecast.get("daily") or {}
         dates = daily.get("time") or []
@@ -330,7 +407,8 @@ def get_weather_forecast(
             })
         if not any(day["available"] for day in weather):
             raise OpenMeteoError("Open-Meteo returned no daily forecast.")
-        return weather, f"天氣資料來源：Open-Meteo（{location.get('name', city)}）"
+        status = f"天氣資料來源：Open-Meteo（{location.get('name', city)}）"
+        return weather, status
     except (IndexError, KeyError, TypeError, ValueError) as error:
         app.logger.warning("Open-Meteo returned an invalid forecast for %s: %s", city, error)
         return weather, "Open-Meteo 回傳的天氣資料格式無效，暫時無法提供預報。"
@@ -657,7 +735,7 @@ day 必須是 1 到 {days}，日期依序增加。category 只能是：食物、
 必須使用真實、明確的地點或店名，不要使用「探索市區」等泛稱。
 """
     try:
-        result = generate_gemini_json(prompt)
+        result, source = generate_planner_json(prompt)
         itinerary = result.get('itinerary') if isinstance(result, dict) else None
         if not isinstance(itinerary, list) or len(itinerary) != days:
             raise ValueError("Gemini returned an invalid itinerary shape.")
@@ -678,12 +756,22 @@ day 必須是 1 到 {days}，日期依序增加。category 只能是：食物、
         return jsonify({
             'itinerary': normalized_itinerary,
             'insights': build_trip_insights(city, days, start_date, float(budget or 0), conditions),
-            'source': 'gemini',
+            'source': source,
         })
+    except OpenRouterAPIError as error:
+        app.logger.error("OpenRouter itinerary fallback returned HTTP %s.", error.status_code)
+        if error.status_code in {401, 403}:
+            return jsonify({'error': 'OpenRouter API 金鑰無效或權限不足，請確認 OPENROUTER_API_KEY。'}), 502
+        if error.status_code == 429:
+            return jsonify({'error': 'OpenRouter 備援服務請求過多或額度不足，請稍後再試。'}), 502
+        return jsonify({'error': 'Gemini 暫時無法使用，OpenRouter 備援服務也未能完成行程生成。'}), 502
     except RuntimeError as error:
-        if "not configured" in str(error):
+        if "GEMINI_API_KEY is not configured" in str(error):
             app.logger.error("GEMINI_API_KEY is not configured.")
             return jsonify({'error': 'Gemini API 尚未設定，請確認 GEMINI_API_KEY 環境變數。'}), 503
+        if "OPENROUTER_API_KEY is not configured" in str(error):
+            app.logger.error("OPENROUTER_API_KEY is not configured for itinerary fallback.")
+            return jsonify({'error': 'Gemini 暫時無法使用，請確認 OPENROUTER_API_KEY 環境變數以啟用備援。'}), 503
         app.logger.exception("Gemini itinerary generation failed.")
         return jsonify({'error': 'Gemini API 呼叫失敗，請確認 API key、模型名稱與部署設定。'}), 502
     except Exception:
@@ -766,6 +854,7 @@ desc 必須明確說明它如何符合使用者的地點與推薦條件。
             return jsonify({
                 'error': 'AI 推薦服務目前無法使用，請確認 Vercel 的 API 金鑰與模型設定。'
             }), 502
+        app.logger.error("GEMINI_API_KEY is not configured.")
         if location or condition:
             return jsonify({
                 'error': 'AI 推薦服務尚未設定，無法依據你的地點與條件生成推薦。'
@@ -1238,7 +1327,6 @@ def build_trip_insights(
             'summary': transport_summary,
             'estimatedCost': transport,
             'tip': transport_tip,
-            'tdxUrl': TDX_REFERENCE_URL,
             'flightsUrl': flight_url,
         },
         'accommodation': {'area': f'{city} 車站周邊', 'nightlyBudget': round(hotel / days), 'reason': '靠近交通節點，適合首次造訪與每日往返。'},
@@ -1355,7 +1443,7 @@ def regenerate_itinerary():
 
     edited_itinerary = itinerary[:days]
     try:
-        result = generate_gemini_json(f"""
+        result, _ = generate_planner_json(f"""
 請根據旅客的修改要求，重新生成完整的 {city} {days} 天旅遊行程。
 出發日期：{start_date.strftime('%Y-%m-%d')}
 旅行風格：{style}；預算：{data.get('budget') or '未指定'} TWD。
@@ -1377,7 +1465,7 @@ day 必須是 1 到 {days}，日期依序增加。category 只能是：食物、
 """)
         generated = result.get('itinerary') if isinstance(result, dict) else None
         if not isinstance(generated, list) or not generated:
-            raise ValueError("Gemini returned an invalid regenerated itinerary shape.")
+            raise ValueError("AI returned an invalid regenerated itinerary shape.")
         if any(
             not has_required_daily_meals_and_attractions(day_plan)
             for day_plan in generated
@@ -1407,9 +1495,19 @@ day 必須是 1 到 {days}，日期依序增加。category 只能是：食物、
             ),
             'days': days,
         })
-    except RuntimeError:
-        app.logger.error("GEMINI_API_KEY is not configured for itinerary regeneration.")
-        return jsonify({'error': 'Gemini API 尚未設定，無法重新生成行程。'}), 503
+    except OpenRouterAPIError as error:
+        app.logger.error("OpenRouter itinerary fallback returned HTTP %s.", error.status_code)
+        if error.status_code in {401, 403}:
+            return jsonify({'error': 'OpenRouter API 金鑰無效或權限不足，請確認 OPENROUTER_API_KEY。'}), 502
+        if error.status_code == 429:
+            return jsonify({'error': 'OpenRouter 備援服務請求過多或額度不足，請稍後再試。'}), 502
+        return jsonify({'error': 'Gemini 暫時無法使用，OpenRouter 備援服務也未能完成行程修改。'}), 502
+    except RuntimeError as error:
+        if "OPENROUTER_API_KEY is not configured" in str(error):
+            app.logger.error("OPENROUTER_API_KEY is not configured for itinerary regeneration.")
+            return jsonify({'error': 'Gemini 暫時無法使用，請確認 OPENROUTER_API_KEY 以啟用備援。'}), 503
+        app.logger.exception("Itinerary regeneration failed.")
+        return jsonify({'error': 'AI 重新生成失敗，請稍後再試。'}), 502
     except ValueError as error:
         app.logger.warning("Gemini returned invalid edited itinerary: %s", error)
         return jsonify({'error': 'AI 回傳的行程格式無法使用，請稍後重試。'}), 502
