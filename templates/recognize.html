@@ -88,13 +88,29 @@
 
                     <p class="text-slate-600 mb-8">{{ result.description }}</p>
 
-                    <h4 class="font-bold mb-4 border-b pb-2">相似景點推薦</h4>
+                    <h4 class="font-bold mb-4 border-b pb-2">
+                        相似景點推薦
+                        <span v-if="result.vectorStore"
+                            class="ml-2 text-xs font-normal text-violet-600">
+                            （Supabase 向量庫）
+                        </span>
+                        <span v-else-if="result.recommendationSource && result.recommendationSource.includes('embedding')"
+                            class="ml-2 text-xs font-normal text-slate-400">
+                            （Gemini Embedding 向量相似度）
+                        </span>
+                    </h4>
                     <div class="grid grid-cols-1 gap-4">
                         <div v-for="spot in result.similarSpots" :key="spot.name"
                             class="flex items-center p-4 bg-slate-50 rounded-2xl">
                             <div class="text-3xl mr-4">{{ spot.emoji }}</div>
                             <div class="flex-1">
-                                <p class="font-bold">{{ spot.name }}</p>
+                                <p class="font-bold">
+                                    {{ spot.name }}
+                                    <span v-if="spot.similarityScore != null"
+                                        class="ml-2 text-xs font-normal text-emerald-600">
+                                        相似度 {{ (spot.similarityScore * 100).toFixed(1) }}%
+                                    </span>
+                                </p>
                                 <p class="text-xs text-slate-400">{{ spot.reason }}</p>
                             </div>
                             <a v-if="spot.mapsUrl" :href="spot.mapsUrl" target="_blank" rel="noopener"

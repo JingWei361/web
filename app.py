@@ -11,6 +11,7 @@ from urllib.parse import quote, urlencode
 from urllib.request import Request, urlopen
 from uuid import uuid4
 
+import numpy as np
 from dotenv import load_dotenv
 from flask import Flask, flash, jsonify, redirect, render_template, request, send_file, session, url_for
 from flask_cors import CORS
@@ -52,8 +53,10 @@ CORS(app, resources={r"/api/*": {"origins": "*"}})
 GEMINI_FALLBACK_MODEL = "gemini-3.5-flash-lite"
 GEMINI_MODEL = get_env("GEMINI_MODEL", "REACT_APP_GEMINI_MODEL", GEMINI_FALLBACK_MODEL)
 GEMINI_TIMEOUT_MS = int(get_env("GEMINI_TIMEOUT_MS", "REACT_APP_GEMINI_TIMEOUT_MS", "60000"))
-GROQ_VISION_MODEL = get_env("GROQ_VISION_MODEL", default="qwen/qwen3.8-27b")
-OPENROUTER_MODEL = get_env("OPENROUTER_MODEL", default="inclusionai/ling-3.2-flash:free")
+GEMINI_EMBEDDING_MODEL = get_env("GEMINI_EMBEDDING_MODEL", "REACT_APP_GEMINI_EMBEDDING_MODEL", default="gemini-embedding-2")
+GEMINI_EMBEDDING_DIMS = int(get_env("GEMINI_EMBEDDING_DIMS", "REACT_APP_GEMINI_EMBEDDING_DIMS", default="768"))
+GROQ_VISION_MODEL = get_env("GROQ_VISION_MODEL", "REACT_APP_GROQ_VISION_MODEL", default="qwen/qwen3.8-27b")
+OPENROUTER_MODEL = get_env("OPENROUTER_MODEL", "REACT_APP_OPENROUTER_MODEL", default="inclusionai/ling-3.2-flash:free")
 ROUTE_OPTIMIZATION_GUIDANCE = """
 路線順暢是重要要求：先把地理位置相近的地點排在同一時段或同一天，沿著同一方向逐區移動；
 避免景點間來回折返、跨區後又返回原區、重複造訪同一地點。依實際合理的交通時間排序，
@@ -98,6 +101,21 @@ supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 def get_gemini_client() -> genai.Client | None:
     api_key = (
         get_env("GEMINI_API_KEY", "REACT_APP_GEMINI_API_KEY")
+        or os.getenv("REACT_APP_EXPLORE_GEMINI_API_KEY")
+    )
+    if not api_key:
+        return None
+    return genai.Client(
+        api_key=api_key,
+        http_options=types.HttpOptions(timeout=GEMINI_TIMEOUT_MS),
+    )
+
+
+def get_gemini_embedding_client() -> genai.Client | None:
+    """優先使用 Embedding 專用 key，沒有的話再 fallback 到一般 Gemini key。"""
+    api_key = (
+        get_env("GEMINI_EMBEDDING_API_KEY", "REACT_APP_GEMINI_EMBEDDING_API_KEY")
+        or get_env("GEMINI_API_KEY", "REACT_APP_GEMINI_API_KEY")
         or os.getenv("REACT_APP_EXPLORE_GEMINI_API_KEY")
     )
     if not api_key:
@@ -159,6 +177,228 @@ def generate_gemini_json(prompt: str, contents: Any = None) -> Any:
     return parse_model_json(response.text)
 
 
+def cosine_similarity(vec_a: list[float] | np.ndarray, vec_b: list[float] | np.ndarray) -> float:
+    """Compute cosine similarity between two vectors."""
+    a = np.asarray(vec_a, dtype=np.float64)
+    b = np.asarray(vec_b, dtype=np.float64)
+    if a.shape != b.shape or a.size == 0:
+        return 0.0
+    norm_a = np.linalg.norm(a)
+    norm_b = np.linalg.norm(b)
+    if norm_a == 0.0 or norm_b == 0.0:
+        return 0.0
+    return float(np.dot(a, b) / (norm_a * norm_b))
+
+
+def embed_texts_with_gemini(texts: list[str]) -> list[list[float]]:
+    """Embed a list of texts using gemini-embedding-2 and return vectors."""
+    client = get_gemini_embedding_client()
+    if client is None:
+        raise RuntimeError(
+            "GEMINI_EMBEDDING_API_KEY 或 GEMINI_API_KEY 尚未設定。"
+        )
+    if not texts:
+        return []
+
+    # Prefer task-aware formatting for retrieval-style similarity.
+    prepared = [
+        f"title: none | text: {text.strip()}" if text.strip() else "title: none | text: empty"
+        for text in texts
+    ]
+    result = client.models.embed_content(
+        model=GEMINI_EMBEDDING_MODEL,
+        contents=prepared,
+        config=types.EmbedContentConfig(output_dimensionality=GEMINI_EMBEDDING_DIMS),
+    )
+    embeddings = getattr(result, "embeddings", None) or []
+    vectors: list[list[float]] = []
+    for emb in embeddings:
+        values = getattr(emb, "values", None)
+        if values is None and isinstance(emb, dict):
+            values = emb.get("values")
+        if not values:
+            raise ValueError("Gemini embedding response is missing vector values.")
+        vectors.append([float(v) for v in values])
+    if len(vectors) != len(texts):
+        raise ValueError(
+            f"Expected {len(texts)} embeddings but received {len(vectors)}."
+        )
+    return vectors
+
+
+def rank_candidates_by_embedding(
+    query_text: str,
+    candidates: list[dict[str, Any]],
+    top_k: int = 2,
+) -> list[dict[str, Any]]:
+    """
+    Rank candidate spots by cosine similarity of gemini-embedding-2 vectors.
+    Each candidate should have at least name / reason (or desc) fields.
+    Returns top_k candidates enriched with similarityScore.
+    """
+    if not candidates:
+        return []
+    query = (query_text or "").strip()
+    if not query:
+        return candidates[:top_k]
+
+    candidate_texts = []
+    for c in candidates:
+        name = str(c.get("name") or "").strip()
+        reason = str(c.get("reason") or c.get("desc") or c.get("description") or "").strip()
+        address = str(c.get("address") or "").strip()
+        text = " | ".join(part for part in (name, reason, address) if part)
+        candidate_texts.append(text or name or "unknown")
+
+    all_texts = [query] + candidate_texts
+    vectors = embed_texts_with_gemini(all_texts)
+    query_vec = vectors[0]
+    scored: list[tuple[float, dict[str, Any]]] = []
+    for idx, candidate in enumerate(candidates):
+        score = cosine_similarity(query_vec, vectors[idx + 1])
+        enriched = dict(candidate)
+        enriched["similarityScore"] = round(score, 4)
+        scored.append((score, enriched))
+
+    scored.sort(key=lambda item: item[0], reverse=True)
+    return [item[1] for item in scored[: max(1, top_k)]]
+
+
+def search_spot_embeddings(
+    query_vector: list[float],
+    *,
+    city: str | None = None,
+    top_k: int = 2,
+    min_similarity: float = 0.72,
+) -> list[dict[str, Any]]:
+    """Query pgvector via Supabase RPC. Returns [] if table/RPC unavailable."""
+    try:
+        payload: dict[str, Any] = {
+            "query_embedding": query_vector,
+            "match_count": top_k,
+            "min_similarity": min_similarity,
+        }
+        if city:
+            payload["filter_city"] = city
+        response = supabase.rpc("match_spot_embeddings", payload).execute()
+        rows = response.data or []
+        spots: list[dict[str, Any]] = []
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            name = str(row.get("name") or "").strip()
+            if not name:
+                continue
+            spots.append({
+                "name": name,
+                "emoji": str(row.get("emoji") or "📍").strip() or "📍",
+                "reason": str(row.get("description") or "").strip(),
+                "address": str(row.get("address") or "").strip(),
+                "city": str(row.get("city") or "").strip(),
+                "similarityScore": round(float(row.get("similarity") or 0), 4),
+                "mapsUrl": google_maps_search_url(
+                    str(row.get("address") or name).strip(),
+                    str(row.get("city") or "").strip(),
+                ),
+            })
+        return spots
+    except Exception as error:
+        app.logger.warning("pgvector search unavailable: %s", error)
+        return []
+
+
+def upsert_spot_embeddings(
+    spots: list[dict[str, Any]],
+    vectors: list[list[float]],
+    *,
+    city: str | None = None,
+    source: str = "ai",
+) -> None:
+    """Best-effort write of ranked spots into the shared vector knowledge base."""
+    if not spots or not vectors or len(spots) != len(vectors):
+        return
+    rows = []
+    for spot, vector in zip(spots, vectors):
+        name = str(spot.get("name") or "").strip()
+        if not name:
+            continue
+        rows.append({
+            "name": name,
+            "emoji": str(spot.get("emoji") or "📍").strip() or "📍",
+            "category": str(spot.get("category") or "attraction").strip() or "attraction",
+            "description": str(
+                spot.get("reason") or spot.get("description") or spot.get("desc") or ""
+            ).strip(),
+            "address": str(spot.get("address") or "").strip(),
+            "city": (city or str(spot.get("city") or "").strip() or None),
+            "source": source,
+            "embedding": vector,
+            "metadata": {
+                "mapsUrl": spot.get("mapsUrl"),
+                "similarityScore": spot.get("similarityScore"),
+            },
+        })
+    if not rows:
+        return
+    try:
+        # Requires service-role key (typical for server-side SUPABASE_KEY)
+        # or an insert policy for authenticated users.
+        supabase.table("spot_embeddings").upsert(
+            rows,
+            on_conflict="name,city",
+        ).execute()
+    except Exception as error:
+        # Unique index is on (name, coalesce(city,'')); some clients need manual merge.
+        app.logger.warning("spot_embeddings upsert failed, trying per-row insert: %s", error)
+        for row in rows:
+            try:
+                existing = (
+                    supabase.table("spot_embeddings")
+                    .select("id")
+                    .eq("name", row["name"])
+                    .eq("city", row["city"])
+                    .limit(1)
+                    .execute()
+                    .data
+                    or []
+                )
+                if existing:
+                    supabase.table("spot_embeddings").update({
+                        "emoji": row["emoji"],
+                        "description": row["description"],
+                        "address": row["address"],
+                        "embedding": row["embedding"],
+                        "metadata": row["metadata"],
+                        "source": row["source"],
+                    }).eq("id", existing[0]["id"]).execute()
+                else:
+                    supabase.table("spot_embeddings").insert(row).execute()
+            except Exception as row_error:
+                app.logger.warning(
+                    "Failed to persist spot embedding for %s: %s",
+                    row.get("name"),
+                    row_error,
+                )
+
+
+def infer_city_from_text(*parts: str) -> str | None:
+    """Lightweight city hint extraction for filtering vector search."""
+    text = " ".join(p for p in parts if p)
+    known = [
+        "東京", "大阪", "京都", "名古屋", "福岡", "札幌", "橫濱", "神戶", "奈良",
+        "台北", "臺北", "台中", "臺中", "台南", "臺南", "高雄", "新北", "桃園",
+        "首爾", "釜山", "濟州",
+        "曼谷", "清邁", "普吉",
+        "新加坡",
+        "巴黎", "倫敦", "紐約", "洛杉磯", "舊金山", "雪梨", "墨爾本",
+        "上海", "北京", "香港", "澳門", "深圳", "廣州", "成都", "杭州",
+    ]
+    for city in known:
+        if city in text:
+            return city
+    return None
+
+
 class OpenRouterAPIError(RuntimeError):
     def __init__(self, status_code: int) -> None:
         self.status_code = status_code
@@ -166,7 +406,7 @@ class OpenRouterAPIError(RuntimeError):
 
 
 def generate_openrouter_json(prompt: str, max_tokens: int = 2048) -> Any:
-    api_key = get_env("OPENROUTER_API_KEY")
+    api_key = get_env("OPENROUTER_API_KEY", "REACT_APP_OPENROUTER_API_KEY")
     if not api_key:
         raise RuntimeError("OPENROUTER_API_KEY is not configured.")
 
@@ -232,7 +472,7 @@ class GroqAPIError(RuntimeError):
 
 
 def generate_groq_image_json(prompt: str, image_bytes: bytes, mime_type: str) -> Any:
-    api_key = get_env("GROQ_API_KEY")
+    api_key = get_env("GROQ_API_KEY", "REACT_APP_GROQ_API_KEY")
     if not api_key:
         raise RuntimeError("GROQ_API_KEY is not configured.")
 
@@ -1528,27 +1768,196 @@ def recognize_image():
     if image.mimetype not in supported_image_types:
         return jsonify({'error': '僅支援 JPEG、PNG、WEBP 或 GIF 圖片。'}), 400
 
-    prompt = """
+    # Step 1: Groq Vision — identify the landmark / scene only.
+    vision_prompt = """
 請辨識這張旅遊圖片中的地標、景點或場景。
 若無法確定，請誠實說明不確定，不要捏造精確地點。
-請推薦 2 個相似或適合延伸探索的景點，每個都要提供可在 Google Maps 搜尋的地點名稱。
-回傳 JSON：{"landmarkName":"辨識名稱或未知","description":"辨識說明","similarSpots":[{"name":"景點名稱","emoji":"圖示","reason":"推薦原因","address":"完整地址"}]}
+不要推薦相似景點，只回傳辨識結果。
+回傳 JSON：{"landmarkName":"辨識名稱或未知","description":"辨識說明（包含地點特徵、氛圍或相關資訊）"}
 """
     try:
-        result = generate_groq_image_json(prompt, image_bytes, image.mimetype)
+        result = generate_groq_image_json(vision_prompt, image_bytes, image.mimetype)
         if not isinstance(result, dict):
             raise ValueError("Groq returned an invalid image result.")
-        if not isinstance(result.get('similarSpots'), list):
-            raise ValueError("Groq returned an invalid similar-spots list.")
-        landmark_name = str(result.get('landmarkName') or '').strip()
+        landmark_name = str(result.get('landmarkName') or '').strip() or '未知'
+        description = str(result.get('description') or '').strip()
+        result['landmarkName'] = landmark_name
+        result['description'] = description
         if landmark_name and landmark_name != '未知':
             result['mapsUrl'] = google_maps_search_url(landmark_name)
-        for spot in result['similarSpots']:
-            if isinstance(spot, dict):
-                spot['mapsUrl'] = google_maps_search_url(
-                    str(spot.get('address') or spot.get('name') or '').strip()
+
+        similar_spots: list[dict[str, Any]] = []
+        recommendation_source = 'groq-fallback'
+        query_text = f"{landmark_name}。{description}".strip('。')
+        city_hint = infer_city_from_text(landmark_name, description)
+
+        # Step 2: Try pgvector knowledge base first (if any rows exist).
+        query_vector: list[float] | None = None
+        try:
+            if landmark_name != '未知' and query_text:
+                query_vector = embed_texts_with_gemini([query_text])[0]
+                db_hits = search_spot_embeddings(
+                    query_vector,
+                    city=city_hint,
+                    top_k=2,
+                    min_similarity=0.72,
                 )
-        return jsonify({**result, 'source': 'groq'})
+                if len(db_hits) >= 2:
+                    similar_spots = db_hits
+                    recommendation_source = 'pgvector'
+                elif len(db_hits) == 1:
+                    # Keep one DB hit; still generate more live candidates below.
+                    similar_spots = db_hits
+        except Exception as vector_error:
+            app.logger.warning("Vector search step skipped: %s", vector_error)
+            query_vector = None
+
+        # Step 3: If knowledge base is sparse, generate candidates with Gemini
+        # and rank them with gemini-embedding-2 + cosine similarity.
+        if len(similar_spots) < 2:
+            try:
+                candidate_prompt = f"""
+根據以下已辨識的旅遊地標，請列出 6 個真實、適合延伸探索的相似或相關景點。
+辨識結果：{landmark_name}
+說明：{description or '無額外說明'}
+每個候選需包含真實店名或景點名稱、emoji、簡短推薦原因、可在 Google Maps 搜尋的完整地址。
+不要重複辨識地標本身；優先選擇同一城市或同類型體驗的景點。
+只回傳 JSON：{{"candidates":[{{"name":"景點名稱","emoji":"圖示","reason":"推薦原因","address":"完整地址","city":"城市"}}]}}
+"""
+                candidate_result = generate_gemini_json(candidate_prompt)
+                candidates = (
+                    candidate_result.get('candidates')
+                    if isinstance(candidate_result, dict)
+                    else None
+                )
+                if not isinstance(candidates, list) or not candidates:
+                    raise ValueError("Gemini returned no candidate spots.")
+
+                valid_candidates = []
+                existing_names = {s['name'] for s in similar_spots}
+                for item in candidates:
+                    if not isinstance(item, dict):
+                        continue
+                    name = str(item.get('name') or '').strip()
+                    if not name or name == landmark_name or name in existing_names:
+                        continue
+                    valid_candidates.append({
+                        'name': name,
+                        'emoji': str(item.get('emoji') or '📍').strip() or '📍',
+                        'reason': str(item.get('reason') or item.get('desc') or '').strip(),
+                        'address': str(item.get('address') or '').strip(),
+                        'city': str(item.get('city') or city_hint or '').strip(),
+                    })
+                if not valid_candidates:
+                    raise ValueError("No valid candidates after filtering.")
+
+                ranked = rank_candidates_by_embedding(
+                    query_text=query_text,
+                    candidates=valid_candidates,
+                    top_k=max(2 - len(similar_spots), 1),
+                )
+                for spot in ranked:
+                    spot['mapsUrl'] = google_maps_search_url(
+                        str(spot.get('address') or spot.get('name') or '').strip(),
+                        str(spot.get('city') or city_hint or '').strip(),
+                    )
+                similar_spots = (similar_spots + ranked)[:2]
+                recommendation_source = (
+                    'pgvector+gemini-embedding-2'
+                    if recommendation_source == 'pgvector'
+                    else 'gemini-embedding-2'
+                )
+
+                # Grow the knowledge base for future requests (best-effort).
+                try:
+                    if query_vector is None:
+                        query_vector = embed_texts_with_gemini([query_text])[0]
+                    candidate_texts = [
+                        " | ".join(
+                            part for part in (
+                                s.get('name'),
+                                s.get('reason') or s.get('description'),
+                                s.get('address'),
+                            )
+                            if part
+                        )
+                        for s in ranked
+                    ]
+                    candidate_vectors = embed_texts_with_gemini(candidate_texts)
+                    upsert_spot_embeddings(
+                        ranked,
+                        candidate_vectors,
+                        city=city_hint,
+                        source='recognize',
+                    )
+                except Exception as persist_error:
+                    app.logger.warning(
+                        "Failed to persist new spot embeddings: %s",
+                        persist_error,
+                    )
+            except Exception as emb_error:
+                app.logger.warning(
+                    "Embedding-based recommendation failed, falling back to Groq candidates: %s",
+                    emb_error,
+                )
+                if not similar_spots:
+                    fallback_prompt = f"""
+已辨識地標：{landmark_name}
+說明：{description or '無'}
+請推薦 2 個相似或適合延伸探索的真實景點，每個都要提供可在 Google Maps 搜尋的地點名稱。
+回傳 JSON：{{"similarSpots":[{{"name":"景點名稱","emoji":"圖示","reason":"推薦原因","address":"完整地址"}}]}}
+"""
+                    try:
+                        fallback = generate_groq_image_json(
+                            fallback_prompt, image_bytes, image.mimetype
+                        )
+                        raw_spots = (
+                            fallback.get('similarSpots')
+                            if isinstance(fallback, dict)
+                            else []
+                        )
+                        if isinstance(raw_spots, list):
+                            for spot in raw_spots[:2]:
+                                if not isinstance(spot, dict):
+                                    continue
+                                name = str(spot.get('name') or '').strip()
+                                if not name:
+                                    continue
+                                similar_spots.append({
+                                    'name': name,
+                                    'emoji': str(spot.get('emoji') or '📍').strip() or '📍',
+                                    'reason': str(spot.get('reason') or '').strip(),
+                                    'address': str(spot.get('address') or '').strip(),
+                                    'mapsUrl': google_maps_search_url(
+                                        str(spot.get('address') or name).strip()
+                                    ),
+                                })
+                            recommendation_source = 'groq-fallback'
+                    except Exception:
+                        app.logger.exception(
+                            "Groq fallback recommendation also failed."
+                        )
+
+        result['similarSpots'] = similar_spots
+        result['recommendationSource'] = recommendation_source
+        result['embeddingModel'] = (
+            GEMINI_EMBEDDING_MODEL
+            if 'embedding' in recommendation_source or recommendation_source == 'pgvector'
+            else None
+        )
+        result['vectorStore'] = recommendation_source.startswith('pgvector')
+        return jsonify({
+            **result,
+            'source': (
+                'groq+pgvector'
+                if recommendation_source.startswith('pgvector')
+                else (
+                    'groq+embedding'
+                    if 'embedding' in recommendation_source
+                    else 'groq'
+                )
+            ),
+        })
     except GroqAPIError as error:
         app.logger.error("Groq image recognition returned HTTP %s.", error.status_code)
         if error.status_code in {401, 403}:
@@ -1557,7 +1966,7 @@ def recognize_image():
             return jsonify({'error': 'Groq API 請求過多或額度不足，請檢查 Groq 帳戶與速率限制。'}), 502
         return jsonify({'error': f'Groq API 呼叫失敗（HTTP {error.status_code}），請稍後再試。'}), 502
     except RuntimeError:
-        if not get_env("GROQ_API_KEY"):
+        if not get_env("GROQ_API_KEY", "REACT_APP_GROQ_API_KEY"):
             app.logger.error("GROQ_API_KEY is not configured.")
             return jsonify({'error': 'Groq API 尚未設定，請確認 GROQ_API_KEY 環境變數。'}), 503
         app.logger.exception("Groq image recognition request failed.")
@@ -1565,6 +1974,7 @@ def recognize_image():
     except Exception:
         app.logger.exception("Groq image recognition failed.")
         return jsonify({'error': 'Groq 圖片辨識失敗，請稍後再試。'}), 502
+
 
 # ==========================================
 # 註冊功能 - 支援個人資料
