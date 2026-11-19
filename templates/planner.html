@@ -117,8 +117,8 @@
                     <input v-model="form.includeEvents" type="checkbox"
                         class="mt-0.5 h-4 w-4 rounded border-slate-300 text-blue-600">
                     <span>
-                        <span class="block text-sm font-bold text-slate-700">加入時事與在地活動</span>
-                        <span class="block text-xs text-slate-500 mt-1">生成行程時搜尋目的地公告、節慶與活動，並預備可替代景點。</span>
+                        <span class="block text-sm font-bold text-slate-700">加入行程期間的節慶與文化活動</span>
+                        <span class="block text-xs text-slate-500 mt-1">若目的地在你的行程日期內有確定的節慶、展覽、市集或文化活動，將活動納入行程；沒有相符活動就保持一般景點安排。</span>
                     </span>
                 </label>
 
@@ -758,6 +758,7 @@
             travelEvents.value = null;
             eventsError.value = '';
             replanMessage.value = '';
+            if (form.includeEvents) await loadTravelEvents();
 
             let controller;
             let timeoutId;
@@ -776,7 +777,8 @@
                         budget: form.budget,
                         style: form.style,
                         conditions: form.conditions,
-                        includeEvents: form.includeEvents
+                        includeEvents: form.includeEvents,
+                        travelEvents: travelEvents.value
                     })
                 }).then(async response => ({
                     response,
@@ -795,7 +797,6 @@
                 if (response.ok) {
                     itinerary.value = data.itinerary;
                     insights.value = data.insights || null;
-                    if (form.includeEvents) await loadTravelEvents();
                     if (itinerary.value.length) targetDay.value = itinerary.value[0].day;
                     isItinerarySaved.value = false;
                     isItineraryFavorite.value = false;
@@ -861,8 +862,8 @@
                     style: form.style,
                     conditions: form.conditions,
                     includeEvents: form.includeEvents,
-                    itinerary: itinerary.value,
-                    travelEvents: travelEvents.value
+                    travelEvents: travelEvents.value,
+                    itinerary: itinerary.value
                 })
             });
             if (response.ok) {

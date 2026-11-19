@@ -685,6 +685,8 @@
                             budget: context.budget || '',
                             style: context.style || 'balanced',
                             conditions: regenerateConditions.value.trim(),
+                            includeEvents: context.includeEvents,
+                            travelEvents: context.travelEvents || null,
                             editInstruction: `請依照以下新的旅遊條件重新生成完整行程：${regenerateConditions.value.trim()}`,
                             itinerary: getItinerary(item)
                         })

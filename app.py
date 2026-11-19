@@ -946,6 +946,7 @@ def generate_itinerary():
     style = str(data.get('style', 'balanced')).strip() or 'balanced'
     conditions = str(data.get('conditions', '')).strip()
     include_events = data.get('includeEvents') is True
+    travel_events = data.get('travelEvents') if isinstance(data.get('travelEvents'), dict) else None
     budget = data.get('budget')
     if len(conditions) > 1000:
         return jsonify({'error': '旅遊條件不可超過 1000 個字。'}), 400
@@ -964,7 +965,8 @@ def generate_itinerary():
 規劃{city} {days}天旅行，日期從{start_date.strftime('%Y-%m-%d')}開始，風格：{style}，預算：{budget or '未指定'} TWD。
 旅客的額外條件與特殊需求如下，必須優先遵守並反映在行程安排中：
 「{conditions or '無額外條件'}」
-{"如果需要加入時事與在地活動：請在行程中預留或加入與目的地日期相符的節慶、展覽、市集或在地活動；每一天至少準備 1 個可替代的景點或室內活動，以應對下雨、休館或臨時取消。不要捏造尚未確認的活動與日期。" if include_events else "除非旅客另有指定，不需要將特定時事或日期限定活動加入行程。"}
+{"只有在行程日期內確定有目的地的節慶、文化祭典、展覽、市集或在地文化活動時，才加入行程；需確認活動日期與地點，並合理安排在對應日期，不要加入交通災害、抗議、一般新聞或無法確認日期的活動。若找不到相符活動，不要勉強新增活動，維持一般景點與餐飲安排。" if include_events else "除非旅客另有指定，不需要將節慶、展覽、市集或在地文化活動加入行程。"}
+{f"可參考的在地文化與節慶搜尋資料（僅在活動日期確實落在旅行期間且地點屬於目的地時採用）：{json.dumps(travel_events.get('culture') or [], ensure_ascii=False)}" if include_events and travel_events else ""}
 如果條件與一般建議衝突，請以旅客條件為準；無法滿足時，請在當天 description 說明原因並提供替代方案。
 {ROUTE_OPTIMIZATION_GUIDANCE}
 {MEAL_AND_ATTRACTION_GUIDANCE}
@@ -1993,6 +1995,8 @@ def regenerate_itinerary():
     style = str(data.get('style', 'balanced')).strip() or 'balanced'
     conditions = str(data.get('conditions', '')).strip()
     edit_instruction = str(data.get('editInstruction', '')).strip()
+    include_events = data.get('includeEvents') is True
+    travel_events = data.get('travelEvents') if isinstance(data.get('travelEvents'), dict) else None
     itinerary = data.get('itinerary')
     try:
         days = max(1, min(14, int(data.get('days', len(itinerary or [])))))
@@ -2017,6 +2021,8 @@ def regenerate_itinerary():
 出發日期：{start_date.strftime('%Y-%m-%d')}
 旅行風格：{style}；預算：{data.get('budget') or '未指定'} TWD。
 特殊條件：{conditions or '無額外條件'}。
+{"僅當目的地在行程日期內確定有節慶、文化祭典、展覽、市集或在地文化活動時，才加入對應日期；必須確認活動日期與地點，不要加入一般時事、交通災害、無法確認日期的活動或臆測活動；找不到相符活動時維持一般景點安排。" if include_events else "除非旅客修改需求明確要求，行程不需加入節慶、展覽、市集或在地文化活動。"}
+{f"可參考的在地文化與節慶搜尋資料（僅在活動日期落在旅行期間且地點屬於目的地時採用）：{json.dumps(travel_events.get('culture') or [], ensure_ascii=False)}" if include_events and travel_events else ""}
 旅客想要修改的內容：
 {edit_instruction}
 以下是目前的原始行程。請依照旅客的修改要求調整，並保留未要求修改的內容與偏好：
