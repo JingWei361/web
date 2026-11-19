@@ -945,6 +945,7 @@ def generate_itinerary():
     start_date_text = str(data.get('startDate', '')).strip()
     style = str(data.get('style', 'balanced')).strip() or 'balanced'
     conditions = str(data.get('conditions', '')).strip()
+    include_events = data.get('includeEvents') is True
     budget = data.get('budget')
     if len(conditions) > 1000:
         return jsonify({'error': '旅遊條件不可超過 1000 個字。'}), 400
@@ -963,6 +964,7 @@ def generate_itinerary():
 規劃{city} {days}天旅行，日期從{start_date.strftime('%Y-%m-%d')}開始，風格：{style}，預算：{budget or '未指定'} TWD。
 旅客的額外條件與特殊需求如下，必須優先遵守並反映在行程安排中：
 「{conditions or '無額外條件'}」
+{"如果需要加入時事與在地活動：請在行程中預留或加入與目的地日期相符的節慶、展覽、市集或在地活動；每一天至少準備 1 個可替代的景點或室內活動，以應對下雨、休館或臨時取消。不要捏造尚未確認的活動與日期。" if include_events else "除非旅客另有指定，不需要將特定時事或日期限定活動加入行程。"}
 如果條件與一般建議衝突，請以旅客條件為準；無法滿足時，請在當天 description 說明原因並提供替代方案。
 {ROUTE_OPTIMIZATION_GUIDANCE}
 {MEAL_AND_ATTRACTION_GUIDANCE}
@@ -1096,35 +1098,40 @@ class GNewsAPIError(RuntimeError):
 travel_events_gnews_cache: dict[str, tuple[float, dict[str, Any]]] = {}
 
 
+def destination_search_settings(city: str) -> tuple[str, str, str]:
+    if re.search(r"法國|巴黎|France|French|Paris", city, re.I):
+        return "France" if "France" in city or "French" in city else "Paris", "fr", "fr"
+    if re.search(r"英國|倫敦|United Kingdom|UK|London", city, re.I):
+        return "London", "en", "gb"
+    if re.search(r"日本|東京|Japan|Tokyo", city, re.I):
+        return "Tokyo", "ja", "jp"
+    if re.search(r"韓國|首爾|South Korea|Korea|Seoul", city, re.I):
+        return "Seoul", "ko", "kr"
+    if re.search(r"泰國|曼谷|Thailand|Bangkok", city, re.I):
+        return "Bangkok", "en", "th"
+    if re.search(r"中國|北京|上海|China|Beijing|Shanghai", city, re.I):
+        return re.sub(r"[^\w\s]", "", city).strip() or "China", "zh", "cn"
+    if re.search(r"台灣|臺灣|Taiwan|Taipei|台北|Taipei", city, re.I):
+        return "Taiwan", "zh", "tw"
+    if re.search(r"美國|紐約|洛杉磯|United States|USA|New York|Los Angeles", city, re.I):
+        return re.sub(r"[\u4e00-\u9fff]+", "", city).strip() or "United States", "en", "us"
+    if re.search(r"義大利|意大利|羅馬|Italy|Italian|Rome", city, re.I):
+        return "Rome", "it", "it"
+    if re.search(r"德國|柏林|Germany|German|Berlin", city, re.I):
+        return "Berlin", "de", "de"
+    if re.search(r"西班牙|巴塞隆納|馬德里|Spain|Barcelona|Madrid", city, re.I):
+        return "Barcelona" if "巴塞隆納" in city or "Barcelona" in city else "Madrid", "es", "es"
+    if re.search(r"澳洲|澳大利亞|悉尼|雪梨|Australia|Sydney|Melbourne", city, re.I):
+        return "Sydney" if "雪梨" in city or "悉尼" in city or "Sydney" in city else "Australia", "en", "au"
+    return city, "en", "us"
+
+
 def search_gnews_travel_events(city: str, window_start: datetime, window_end: datetime) -> dict[str, Any]:
     api_key = get_env("GNEWS_API_KEY", "REACT_APP_GNEWS_API_KEY")
     if not api_key:
         raise RuntimeError("GNEWS_API_KEY is not configured.")
 
-    lang = get_env("GNEWS_LANG", "REACT_APP_GNEWS_LANG", "zh") or "zh"
-    country = get_env("GNEWS_COUNTRY", "REACT_APP_GNEWS_COUNTRY", "tw") or "tw"
-    if re.search(r"法國|巴黎|France|French|Paris", city, re.I):
-        lang = "fr"
-        country = "fr"
-    elif re.search(r"英國|倫敦|United Kingdom|UK|London", city, re.I):
-        lang = "en"
-        country = "gb"
-    elif re.search(r"日本|東京|Japan|Tokyo", city, re.I):
-        lang = "ja"
-        country = "jp"
-    elif re.search(r"韓國|首爾|South Korea|Korea|Seoul", city, re.I):
-        lang = "ko"
-        country = "kr"
-    elif re.search(r"泰國|曼谷|Thailand|Bangkok", city, re.I):
-        lang = "en"
-        country = "th"
-    query = city
-    if re.search(r"法國|France|French", city, re.I):
-        query = "France"
-    elif re.search(r"巴黎|Paris", city, re.I):
-        query = "Paris"
-    elif re.search(r"英國|倫敦|United Kingdom|UK|London", city, re.I):
-        query = "London"
+    query, lang, country = destination_search_settings(city)
     cache_key = (
         f"{city}|{lang}|{country}|"
         f"{window_start:%Y-%m-%d}|{window_end:%Y-%m-%d}"
@@ -1236,6 +1243,33 @@ def search_gnews_travel_events(city: str, window_start: datetime, window_end: da
         "sources": sources,
         "source": "gnews",
     }
+    try:
+        translatable = [
+            {"title": event["title"], "description": event["description"]}
+            for category in ("disruptions", "culture")
+            for event in events[category]
+        ]
+        if translatable:
+            translated = generate_gemini_json(f"""
+請將以下旅遊時事與在地活動內容翻譯成自然、準確的繁體中文。
+保留專有名詞、日期、地點與數字；不要補充原文沒有的資訊。
+只回傳 JSON：{{"items":[{{"title":"中文標題","description":"中文說明"}}]}}
+資料：{json.dumps(translatable, ensure_ascii=False)}
+""")
+            items = translated.get("items") if isinstance(translated, dict) else None
+            if isinstance(items, list):
+                index = 0
+                for category in ("disruptions", "culture"):
+                    for event in events[category]:
+                        item = items[index] if index < len(items) else None
+                        if isinstance(item, dict):
+                            event["originalTitle"] = event["title"]
+                            event["originalDescription"] = event["description"]
+                            event["title"] = str(item.get("title") or event["title"]).strip()[:160]
+                            event["description"] = str(item.get("description") or event["description"]).strip()[:500]
+                        index += 1
+    except Exception:
+        app.logger.exception("Travel events translation failed.")
     travel_events_gnews_cache[cache_key] = (time.time() + 300, result)
     return result
 
@@ -1610,6 +1644,7 @@ def create_generation_record():
         return error
     data = request.get_json(silent=True) or {}
     itinerary = data.get('itinerary')
+    travel_events = data.get('travelEvents')
     city = str(data.get('city', '')).strip()
     parent_generation_record_id = str(data.get('parentGenerationRecordId') or '').strip() or None
     if not city or not isinstance(itinerary, list) or not itinerary:
@@ -1635,12 +1670,17 @@ def create_generation_record():
                 'budget': data.get('budget'),
                 'style': data.get('style'),
                 'conditions': data.get('conditions'),
+                'travelEvents': travel_events if isinstance(travel_events, dict) else None,
+                'includeEvents': data.get('includeEvents') is True,
                 'parentGenerationRecordId': parent_generation_record_id,
             },
             'parent_generation_record_id': parent_generation_record_id,
             'model_name': 'demo-itinerary-generator',
             'request_payload': data,
-            'response_payload': {'itinerary': itinerary},
+            'response_payload': {
+                'itinerary': itinerary,
+                'travelEvents': travel_events if isinstance(travel_events, dict) else None,
+            },
         }).execute().data[0]
         return jsonify({'record': record}), 201
     except Exception as error:

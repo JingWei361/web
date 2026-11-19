@@ -294,6 +294,41 @@
                             </article>
                         </div>
                         <p v-else class="text-sm text-slate-500">這筆行程沒有可顯示的詳細內容。</p>
+                        <div v-if="selectedGeneration.record.context_data?.travelEvents"
+                            class="grid gap-4 border-t border-slate-100 pt-4">
+                            <section class="rounded-xl border border-amber-100 bg-amber-50 p-4">
+                                <h4 class="mb-3 font-bold text-amber-800">目的地時事與旅行注意事項</h4>
+                                <div v-if="(selectedGeneration.record.context_data.travelEvents.disruptions || []).length"
+                                    class="space-y-2">
+                                    <article v-for="event in selectedGeneration.record.context_data.travelEvents.disruptions"
+                                        :key="`${event.title}-${event.date}`"
+                                        class="rounded-lg bg-white/70 p-3">
+                                        <p class="font-semibold">{{ event.title }}</p>
+                                        <p class="mt-1 text-xs text-slate-500">
+                                            {{ event.date }}<span v-if="event.location"> · {{ event.location }}</span>
+                                        </p>
+                                        <p class="mt-2 text-sm text-slate-700">{{ event.description }}</p>
+                                    </article>
+                                </div>
+                                <p v-else class="text-sm text-slate-500">收藏時沒有找到相關旅行注意事項。</p>
+                            </section>
+                            <section class="rounded-xl border border-indigo-100 bg-indigo-50 p-4">
+                                <h4 class="mb-3 font-bold text-indigo-800">目的地在地文化與活動</h4>
+                                <div v-if="(selectedGeneration.record.context_data.travelEvents.culture || []).length"
+                                    class="space-y-2">
+                                    <article v-for="event in selectedGeneration.record.context_data.travelEvents.culture"
+                                        :key="`${event.title}-${event.date}`"
+                                        class="rounded-lg bg-white/70 p-3">
+                                        <p class="font-semibold">{{ event.title }}</p>
+                                        <p class="mt-1 text-xs text-slate-500">
+                                            {{ event.date }}<span v-if="event.location"> · {{ event.location }}</span>
+                                        </p>
+                                        <p class="mt-2 text-sm text-slate-700">{{ event.description }}</p>
+                                    </article>
+                                </div>
+                                <p v-else class="text-sm text-slate-500">收藏時沒有找到符合的節慶或在地活動。</p>
+                            </section>
+                        </div>
                         <div v-if="selectedGenerationInsights" class="grid gap-4 border-t border-slate-100 pt-4">
                             <section class="rounded-xl bg-sky-50 p-4">
                                 <h4 class="mb-2 font-bold text-slate-800">天氣預報</h4>
@@ -594,7 +629,14 @@
             if (!query) return generationFavorites.value;
             return generationFavorites.value.filter(item => {
                 const record = item.record || {};
-                return [record.title, record.prompt, record.context_data?.city].some(value =>
+                const travelEvents = record.context_data?.travelEvents;
+                const eventText = travelEvents
+                    ? [
+                        ...(travelEvents.disruptions || []).map(event => `${event.title} ${event.description}`),
+                        ...(travelEvents.culture || []).map(event => `${event.title} ${event.description}`)
+                    ].join(' ')
+                    : '';
+                return [record.title, record.prompt, record.context_data?.city, eventText].some(value =>
                     String(value || '').toLowerCase().includes(query)
                 );
             });
@@ -659,8 +701,10 @@
                             budget: context.budget,
                             style: context.style,
                             conditions: regenerateConditions.value.trim(),
+                            includeEvents: context.includeEvents,
                             parentGenerationRecordId: record.id,
-                            itinerary: data.itinerary
+                            itinerary: data.itinerary,
+                            travelEvents: context.travelEvents || null
                         })
                     });
                     const saved = await saveResponse.json().catch(() => ({}));
@@ -698,8 +742,10 @@
                             budget: context.budget,
                             style: context.style || 'balanced',
                             conditions: context.conditions || '',
+                            includeEvents: context.includeEvents,
                             parentGenerationRecordId: record.id,
-                            itinerary: selectedGenerationItinerary.value
+                            itinerary: selectedGenerationItinerary.value,
+                            travelEvents: context.travelEvents || null
                         })
                     });
                     const saved = await saveResponse.json().catch(() => ({}));
@@ -948,6 +994,20 @@
                 });
                 lines.push('');
             });
+            const travelEvents = context.travelEvents;
+            if (travelEvents) {
+                lines.push('目的地時事與旅行注意事項');
+                (travelEvents.disruptions || []).forEach(event => {
+                    lines.push(`- ${event.title}｜${event.date}${event.location ? `｜${event.location}` : ''}`);
+                    if (event.description) lines.push(`  ${event.description}`);
+                });
+                lines.push('');
+                lines.push('目的地在地文化與活動');
+                (travelEvents.culture || []).forEach(event => {
+                    lines.push(`- ${event.title}｜${event.date}${event.location ? `｜${event.location}` : ''}`);
+                    if (event.description) lines.push(`  ${event.description}`);
+                });
+            }
             return lines.join('\n');
         };
         const downloadGeneration = (item) => {

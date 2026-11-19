@@ -113,6 +113,14 @@
                         class="w-full border border-slate-200 rounded-xl px-4 py-2 focus:ring-2 focus:ring-blue-500 outline-none resize-y"></textarea>
                     <p class="text-xs text-slate-400 mt-1">AI 會依照這些條件調整景點、順序、交通與行程節奏。</p>
                 </div>
+                <label class="mb-6 flex items-start gap-3 rounded-xl border border-slate-200 px-4 py-3">
+                    <input v-model="form.includeEvents" type="checkbox"
+                        class="mt-0.5 h-4 w-4 rounded border-slate-300 text-blue-600">
+                    <span>
+                        <span class="block text-sm font-bold text-slate-700">加入時事與在地活動</span>
+                        <span class="block text-xs text-slate-500 mt-1">生成行程時搜尋目的地公告、節慶與活動，並預備可替代景點。</span>
+                    </span>
+                </label>
 
                 <button @click="generateItinerary" :disabled="isGenerating"
                     class="w-full bg-slate-900 text-white py-3 rounded-xl font-bold hover:bg-slate-800 transition disabled:bg-slate-300">
@@ -133,8 +141,9 @@
                     <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-6">
                         <h3 class="text-xl font-bold">你的行程</h3>
                         <div class="flex items-center gap-3">
-                            <button @click="toggleItineraryFavorite" :disabled="!isItinerarySaved" type="button"
-                                class="text-sm font-bold text-amber-600 hover:text-amber-700 disabled:cursor-not-allowed disabled:text-slate-300">
+                            <button @click="toggleItineraryFavorite" :disabled="isReordering" type="button"
+                                class="text-sm font-bold text-amber-600 hover:text-amber-700 disabled:cursor-not-allowed disabled:text-slate-300"
+                                :title="isReordering ? '請先點擊完成編輯，再收藏行程' : ''">
                                 {{ isItineraryFavorite ? '★ 已收藏行程' : '☆ 收藏這份行程' }}
                             </button>
                             <button @click="toggleReorderMode" type="button"
@@ -309,12 +318,19 @@
                                 <article v-for="event in travelEvents.disruptions"
                                     :key="`${event.title}-${event.date}`"
                                     class="rounded-xl border border-amber-100 bg-amber-50 p-4">
-                                    <p class="font-semibold">{{ event.title }}</p>
+                                            <div class="flex items-start justify-between gap-2">
+                                                <p class="font-semibold">{{ eventDisplay(event).title }}</p>
+                                                <button v-if="event.originalTitle || event.originalDescription"
+                                                    @click="toggleEventTranslation(event)" type="button"
+                                                    class="shrink-0 rounded-full border border-amber-200 bg-white px-2 py-1 text-xs font-bold text-amber-700">
+                                                    {{ event.showOriginal ? '顯示中文' : '查看原文' }}
+                                                </button>
+                                            </div>
                                     <p class="text-xs text-slate-600 mt-1">
                                         {{ event.date }}<span v-if="event.location"> · {{ event.location }}</span>
                                         <span v-if="event.status"> · {{ event.status }}</span>
                                     </p>
-                                    <p class="text-sm text-slate-700 mt-2">{{ event.description }}</p>
+                                    <p class="text-sm text-slate-700 mt-2">{{ eventDisplay(event).description }}</p>
                                 </article>
                             </div>
                             <p v-else class="text-sm text-slate-500">搜尋期間內沒有找到有可靠來源的相關公告。</p>
@@ -325,12 +341,19 @@
                                 <article v-for="event in travelEvents.culture"
                                     :key="`${event.title}-${event.date}`"
                                     class="rounded-xl border border-indigo-100 bg-indigo-50 p-4">
-                                    <p class="font-semibold">{{ event.title }}</p>
+                                    <div class="flex items-start justify-between gap-2">
+                                        <p class="font-semibold">{{ eventDisplay(event).title }}</p>
+                                        <button v-if="event.originalTitle || event.originalDescription"
+                                            @click="toggleEventTranslation(event)" type="button"
+                                            class="shrink-0 rounded-full border border-indigo-200 bg-white px-2 py-1 text-xs font-bold text-indigo-700">
+                                            {{ event.showOriginal ? '顯示中文' : '查看原文' }}
+                                        </button>
+                                    </div>
                                     <p class="text-xs text-slate-600 mt-1">
                                         {{ event.date }}<span v-if="event.location"> · {{ event.location }}</span>
                                         <span v-if="event.status"> · {{ event.status }}</span>
                                     </p>
-                                    <p class="text-sm text-slate-700 mt-2">{{ event.description }}</p>
+                                    <p class="text-sm text-slate-700 mt-2">{{ eventDisplay(event).description }}</p>
                                 </article>
                             </div>
                             <p v-else class="text-sm text-slate-500">搜尋期間內沒有找到符合的節慶或特色活動。</p>
@@ -670,8 +693,18 @@
             startDate: today,
             budget: '',
             style: 'balanced',
-            conditions: ''
+            conditions: '',
+            includeEvents: true
         });
+        const eventDisplay = (event) => event.showOriginal
+            ? {
+                title: event.originalTitle || event.title,
+                description: event.originalDescription || event.description
+            }
+            : { title: event.title, description: event.description };
+        const toggleEventTranslation = (event) => {
+            event.showOriginal = !event.showOriginal;
+        };
 
         const loadTravelEvents = async () => {
             if (!form.city || !form.startDate) return;
@@ -742,7 +775,8 @@
                         startDate: form.startDate,
                         budget: form.budget,
                         style: form.style,
-                        conditions: form.conditions
+                        conditions: form.conditions,
+                        includeEvents: form.includeEvents
                     })
                 }).then(async response => ({
                     response,
@@ -761,7 +795,7 @@
                 if (response.ok) {
                     itinerary.value = data.itinerary;
                     insights.value = data.insights || null;
-                    loadTravelEvents();
+                    if (form.includeEvents) await loadTravelEvents();
                     if (itinerary.value.length) targetDay.value = itinerary.value[0].day;
                     isItinerarySaved.value = false;
                     isItineraryFavorite.value = false;
@@ -826,7 +860,9 @@
                     budget: form.budget,
                     style: form.style,
                     conditions: form.conditions,
-                    itinerary: itinerary.value
+                    includeEvents: form.includeEvents,
+                    itinerary: itinerary.value,
+                    travelEvents: travelEvents.value
                 })
             });
             if (response.ok) {
@@ -840,8 +876,8 @@
         };
 
         const toggleItineraryFavorite = async () => {
-            if (!isItinerarySaved.value) {
-                alert('請先保存行程，再收藏。');
+            if (isReordering.value) {
+                alert('請先點擊「完成編輯」，再收藏行程。');
                 return;
             }
             if (!isAuthenticated) {
@@ -995,7 +1031,8 @@
                     startDate: form.startDate,
                     budget: form.budget,
                     style: form.style,
-                    conditions: form.conditions
+                    conditions: form.conditions,
+                    includeEvents: form.includeEvents
                 },
                 insights: insights.value,
                 travelEvents: travelEvents.value,
@@ -1040,7 +1077,10 @@
                                     : form.style,
                                 conditions: typeof savedState.form.conditions === 'string'
                                     ? savedState.form.conditions
-                                    : form.conditions
+                                    : form.conditions,
+                                includeEvents: typeof savedState.form.includeEvents === 'boolean'
+                                    ? savedState.form.includeEvents
+                                    : form.includeEvents
                             });
                         }
                         if (savedState.insights && typeof savedState.insights === 'object') {
@@ -1064,6 +1104,7 @@
 
         return {
             form, today, isGenerating, itinerary, insights, travelEvents, isLoadingEvents, eventsError,
+        eventDisplay, toggleEventTranslation,
             loadTravelEvents, isReplanning, targetDay, changeReason, replanMessage,
             editInstruction, isItineraryFavorite, isItinerarySaved, isReordering, isSaving,
             activityDeleteTarget, requestDeleteActivity, cancelDeleteActivity, confirmDeleteActivity,
