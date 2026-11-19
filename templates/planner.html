@@ -285,6 +285,70 @@
                     <p v-if="replanMessage" class="text-sm text-green-600 mt-3">{{ replanMessage }}</p>
                 </div>
 
+                <div v-if="isLoadingEvents || travelEvents || eventsError"
+                    class="bg-white p-8 rounded-3xl shadow-md">
+                    <div class="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-2 mb-5">
+                        <div>
+                            <h3 class="text-xl font-bold">目的地時事與在地活動</h3>
+                            <p v-if="travelEvents" class="text-sm text-slate-500 mt-1">
+                                搜尋期間：{{ travelEvents.fromDate }} 至 {{ travelEvents.toDate }}
+                            </p>
+                        </div>
+                        <button v-if="eventsError" @click="loadTravelEvents" type="button"
+                            class="text-sm font-bold text-blue-600 hover:text-blue-800">重新搜尋</button>
+                    </div>
+                    <p class="text-xs text-slate-500 mb-4">
+                        災害、抗議及交通安排可能臨時變動；出發前請再次確認官方公告。節慶日期以主辦單位最新資訊為準。
+                    </p>
+                    <p v-if="isLoadingEvents" class="text-sm text-slate-500">正在搜尋目的地公告與在地活動...</p>
+                    <p v-if="eventsError" class="text-sm text-red-600">{{ eventsError }}</p>
+                    <div v-if="travelEvents" class="grid grid-cols-1 md:grid-cols-2 gap-5">
+                        <section>
+                            <h4 class="font-bold text-base text-amber-800 mb-3">旅行注意事項</h4>
+                            <div v-if="travelEvents.disruptions.length" class="space-y-3">
+                                <article v-for="event in travelEvents.disruptions"
+                                    :key="`${event.title}-${event.date}`"
+                                    class="rounded-xl border border-amber-100 bg-amber-50 p-4">
+                                    <p class="font-semibold">{{ event.title }}</p>
+                                    <p class="text-xs text-slate-600 mt-1">
+                                        {{ event.date }}<span v-if="event.location"> · {{ event.location }}</span>
+                                        <span v-if="event.status"> · {{ event.status }}</span>
+                                    </p>
+                                    <p class="text-sm text-slate-700 mt-2">{{ event.description }}</p>
+                                </article>
+                            </div>
+                            <p v-else class="text-sm text-slate-500">搜尋期間內沒有找到有可靠來源的相關公告。</p>
+                        </section>
+                        <section>
+                            <h4 class="font-bold text-base text-indigo-800 mb-3">在地文化與節慶</h4>
+                            <div v-if="travelEvents.culture.length" class="space-y-3">
+                                <article v-for="event in travelEvents.culture"
+                                    :key="`${event.title}-${event.date}`"
+                                    class="rounded-xl border border-indigo-100 bg-indigo-50 p-4">
+                                    <p class="font-semibold">{{ event.title }}</p>
+                                    <p class="text-xs text-slate-600 mt-1">
+                                        {{ event.date }}<span v-if="event.location"> · {{ event.location }}</span>
+                                        <span v-if="event.status"> · {{ event.status }}</span>
+                                    </p>
+                                    <p class="text-sm text-slate-700 mt-2">{{ event.description }}</p>
+                                </article>
+                            </div>
+                            <p v-else class="text-sm text-slate-500">搜尋期間內沒有找到符合的節慶或特色活動。</p>
+                        </section>
+                    </div>
+                    <div v-if="travelEvents && travelEvents.sources.length" class="mt-5 border-t pt-4">
+                        <h4 class="text-sm font-bold mb-2">搜尋來源</h4>
+                        <ul class="flex flex-wrap gap-x-4 gap-y-2">
+                            <li v-for="source in travelEvents.sources" :key="source.url">
+                                <a :href="source.url" target="_blank" rel="noopener"
+                                    class="text-xs text-blue-600 hover:text-blue-800 underline">
+                                    {{ source.title }} ↗
+                                </a>
+                            </li>
+                        </ul>
+                    </div>
+                </div>
+
                 <div v-if="insights" class="grid grid-cols-1 lg:grid-cols-3 gap-6">
                     <div class="bg-white p-6 rounded-3xl shadow-md">
                         <h3 class="font-bold text-lg mb-4">天氣預報</h3>
@@ -371,6 +435,9 @@
         const generationError = Vue.ref('');
         const itinerary = Vue.ref(null);
         const insights = Vue.ref(null);
+        const travelEvents = Vue.ref(null);
+        const isLoadingEvents = Vue.ref(false);
+        const eventsError = Vue.ref('');
         const favorites = Vue.ref([]);
         const isReplanning = Vue.ref(false);
         const isRegenerating = Vue.ref(false);
@@ -606,6 +673,45 @@
             conditions: ''
         });
 
+        const loadTravelEvents = async () => {
+            if (!form.city || !form.startDate) return;
+            isLoadingEvents.value = true;
+            eventsError.value = '';
+            try {
+                const response = await fetch(`/api/travel_events?_=${Date.now()}`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Cache-Control': 'no-cache',
+                    },
+                    cache: 'no-store',
+                    body: JSON.stringify({
+                        city: form.city,
+                        days: form.days,
+                        startDate: form.startDate
+                    })
+                });
+                const responseText = await response.text();
+                let data;
+                try {
+                    data = JSON.parse(responseText);
+                } catch (_) {
+                    throw new Error(
+                        `時事服務回傳了無法解析的回應（HTTP ${response.status}）。請重新整理頁面後再試。`
+                    );
+                }
+                if (!response.ok) throw new Error(data.error || '目的地時事搜尋失敗。');
+                travelEvents.value = data;
+                saveItinerary();
+            } catch (error) {
+                eventsError.value =
+                    error.message ||
+                    `時事搜尋連線失敗（HTTP 未回應）。請重新整理頁面後再試。`;
+            } finally {
+                isLoadingEvents.value = false;
+            }
+        };
+
         const generateItinerary = async () => {
             // 檢查目的地與天數
             if (!form.city) return alert('請輸入目的地');
@@ -616,6 +722,8 @@
             generationSecondsLeft.value = 60;
             itinerary.value = null;
             insights.value = null;
+            travelEvents.value = null;
+            eventsError.value = '';
             replanMessage.value = '';
 
             let controller;
@@ -653,6 +761,7 @@
                 if (response.ok) {
                     itinerary.value = data.itinerary;
                     insights.value = data.insights || null;
+                    loadTravelEvents();
                     if (itinerary.value.length) targetDay.value = itinerary.value[0].day;
                     isItinerarySaved.value = false;
                     isItineraryFavorite.value = false;
@@ -889,6 +998,7 @@
                     conditions: form.conditions
                 },
                 insights: insights.value,
+                travelEvents: travelEvents.value,
                 isItinerarySaved: isItinerarySaved.value
             }));
         };
@@ -936,6 +1046,11 @@
                         if (savedState.insights && typeof savedState.insights === 'object') {
                             insights.value = savedState.insights;
                         }
+                        if (savedState.travelEvents && typeof savedState.travelEvents === 'object') {
+                            travelEvents.value = savedState.travelEvents;
+                        } else {
+                            loadTravelEvents();
+                        }
                         isItinerarySaved.value = savedState.isItinerarySaved === true;
                         targetDay.value = itinerary.value[0].day || 1;
                     }
@@ -948,7 +1063,8 @@
         });
 
         return {
-            form, today, isGenerating, itinerary, insights, isReplanning, targetDay, changeReason, replanMessage,
+            form, today, isGenerating, itinerary, insights, travelEvents, isLoadingEvents, eventsError,
+            loadTravelEvents, isReplanning, targetDay, changeReason, replanMessage,
             editInstruction, isItineraryFavorite, isItinerarySaved, isReordering, isSaving,
             activityDeleteTarget, requestDeleteActivity, cancelDeleteActivity, confirmDeleteActivity,
             toggleItineraryFavorite, toggleReorderMode, saveCurrentItinerary, toggleFavorite, isFavorite, generateItinerary, replanItinerary, regenerateEditedItinerary, isRegenerating, activityLabel, activityMapsUrl, itineraryMapsUrl,

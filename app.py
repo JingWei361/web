@@ -1,6 +1,8 @@
 import os
 import json
 import re
+import calendar
+import time
 import mimetypes
 import base64
 from io import BytesIO
@@ -1017,6 +1019,293 @@ day 必須是 1 到 {days}，日期依序增加。category 只能是：食物、
     except Exception:
         app.logger.exception("Gemini itinerary generation failed.")
         return jsonify({'error': 'AI 行程規劃失敗，請稍後再試。'}), 502
+
+
+def shift_calendar_months(value: datetime, months: int) -> datetime:
+    month_index = value.year * 12 + value.month - 1 + months
+    year, month = divmod(month_index, 12)
+    month += 1
+    day = min(value.day, calendar.monthrange(year, month)[1])
+    return value.replace(year=year, month=month, day=day)
+
+
+def normalize_travel_events(result: Any) -> dict[str, list[dict[str, str]]]:
+    if not isinstance(result, dict):
+        raise ValueError("Gemini returned an invalid travel-events response.")
+
+    normalized: dict[str, list[dict[str, str]]] = {
+        "disruptions": [],
+        "culture": [],
+    }
+    categories = {
+        "disruptions": "travel_disruption",
+        "culture": "local_culture",
+    }
+    for output_key, category in categories.items():
+        events = result.get(output_key)
+        if not isinstance(events, list):
+            raise ValueError("Gemini returned an invalid travel-events list.")
+        for event in events[:5]:
+            if not isinstance(event, dict) or event.get("category") != category:
+                continue
+            title = event.get("title")
+            event_date = event.get("date")
+            description = event.get("description")
+            if not all(isinstance(value, str) and value.strip()
+                       for value in (title, event_date, description)):
+                continue
+            normalized[output_key].append({
+                "title": title.strip()[:160],
+                "date": event_date.strip()[:100],
+                "location": str(event.get("location") or "").strip()[:160],
+                "description": description.strip()[:500],
+                "status": str(event.get("status") or "").strip()[:80],
+            })
+    return normalized
+
+
+def get_grounding_sources(response: Any) -> list[dict[str, str]]:
+    sources: list[dict[str, str]] = []
+    seen_urls: set[str] = set()
+    for candidate in getattr(response, "candidates", None) or []:
+        metadata = getattr(candidate, "grounding_metadata", None)
+        for chunk in getattr(metadata, "grounding_chunks", None) or []:
+            web_source = getattr(chunk, "web", None)
+            url = getattr(web_source, "uri", None)
+            title = getattr(web_source, "title", None)
+            if (not isinstance(url, str)
+                    or not url.startswith(("https://", "http://"))
+                    or url in seen_urls):
+                continue
+            seen_urls.add(url)
+            sources.append({
+                "title": str(title or url)[:200],
+                "url": url,
+            })
+            if len(sources) == 8:
+                return sources
+    return sources
+
+
+class GNewsAPIError(RuntimeError):
+    def __init__(self, status_code: int) -> None:
+        self.status_code = status_code
+        super().__init__(f"GNews API returned HTTP {status_code}.")
+
+
+travel_events_gnews_cache: dict[str, tuple[float, dict[str, Any]]] = {}
+
+
+def search_gnews_travel_events(city: str, window_start: datetime, window_end: datetime) -> dict[str, Any]:
+    api_key = get_env("GNEWS_API_KEY", "REACT_APP_GNEWS_API_KEY")
+    if not api_key:
+        raise RuntimeError("GNEWS_API_KEY is not configured.")
+
+    lang = get_env("GNEWS_LANG", "REACT_APP_GNEWS_LANG", "zh") or "zh"
+    country = get_env("GNEWS_COUNTRY", "REACT_APP_GNEWS_COUNTRY", "tw") or "tw"
+    if re.search(r"法國|巴黎|France|French|Paris", city, re.I):
+        lang = "fr"
+        country = "fr"
+    elif re.search(r"英國|倫敦|United Kingdom|UK|London", city, re.I):
+        lang = "en"
+        country = "gb"
+    elif re.search(r"日本|東京|Japan|Tokyo", city, re.I):
+        lang = "ja"
+        country = "jp"
+    elif re.search(r"韓國|首爾|South Korea|Korea|Seoul", city, re.I):
+        lang = "ko"
+        country = "kr"
+    elif re.search(r"泰國|曼谷|Thailand|Bangkok", city, re.I):
+        lang = "en"
+        country = "th"
+    query = city
+    if re.search(r"法國|France|French", city, re.I):
+        query = "France"
+    elif re.search(r"巴黎|Paris", city, re.I):
+        query = "Paris"
+    elif re.search(r"英國|倫敦|United Kingdom|UK|London", city, re.I):
+        query = "London"
+    cache_key = (
+        f"{city}|{lang}|{country}|"
+        f"{window_start:%Y-%m-%d}|{window_end:%Y-%m-%d}"
+    )
+    cached = travel_events_gnews_cache.get(cache_key)
+    if cached and cached[0] > time.time():
+        return cached[1]
+    events: dict[str, list[dict[str, str]]] = {
+        "disruptions": [],
+        "culture": [],
+    }
+    sources: list[dict[str, str]] = []
+    seen_sources: set[str] = set()
+
+    params = urlencode({
+        "apikey": api_key,
+        "q": query,
+        "lang": lang,
+        "country": country,
+        "from": window_start.strftime("%Y-%m-%dT00:00:00Z"),
+        "to": window_end.strftime("%Y-%m-%dT23:59:59Z"),
+        "sortby": "publishedAt",
+        "max": 10,
+    })
+    api_request = Request(
+        f"https://gnews.io/api/v4/search?{params}",
+        headers={
+            "Accept": "application/json",
+            "User-Agent": "AITravelAssistant/1.0",
+        },
+        method="GET",
+    )
+    try:
+        payload = None
+        for attempt in range(2):
+            try:
+                with urlopen(api_request, timeout=30) as response:
+                    payload = json.loads(response.read())
+                break
+            except HTTPError as error:
+                if error.code == 429 and attempt == 0:
+                    time.sleep(1.1)
+                    continue
+                raise GNewsAPIError(error.code) from error
+        if payload is None:
+            raise GNewsAPIError(502)
+    except (URLError, TimeoutError) as error:
+        raise RuntimeError("Could not connect to the GNews API.") from error
+
+    disruption_keywords = (
+        "交通", "災害", "颱風", "地震", "罷工", "抗議",
+        "中斷", "封路", "事故", "航班", "列車", "火災",
+        "strike", "protest", "disruption", "transport",
+        "closure", "train", "delay", "cancellation", "cancelled",
+        "airport", "road", "storm", "flood", "fire",
+        "grève", "manifestation", "réseau", "inondation",
+    )
+    culture_keywords = (
+        "節慶", "節日", "活動", "祭典", "花火", "燈節",
+        "文化", "慶典", "市集", "遊行", "展覽",
+        "festival", "celebration", "fair", "exhibition",
+    )
+
+    for article in payload.get("articles") or []:
+        if not isinstance(article, dict):
+            continue
+        title = str(article.get("title") or "").strip()
+        url = str(article.get("url") or "").strip()
+        description = str(
+            article.get("description") or article.get("content") or ""
+        ).strip()
+        if not title or not url:
+            continue
+
+        searchable_text = f"{title} {description}"
+        if any(keyword in searchable_text for keyword in disruption_keywords):
+            output_key = "disruptions"
+            status = "已報導"
+        elif any(keyword in searchable_text for keyword in culture_keywords):
+            output_key = "culture"
+            status = "已報導"
+        else:
+            continue
+
+        published_at = str(article.get("publishedAt") or "").strip()
+        event_date = published_at[:10] if re.match(r"\d{4}-\d{2}-\d{2}", published_at) else ""
+        events[output_key].append({
+            "title": title[:160],
+            "date": event_date or "報導日期未提供",
+            "location": city[:160],
+            "description": description[:500] or "詳情請參閱新聞來源。",
+            "status": status,
+        })
+        if url not in seen_sources:
+            seen_sources.add(url)
+            source_info = article.get("source")
+            source_name = source_info.get("name") if isinstance(source_info, dict) else None
+            sources.append({
+                "title": str(source_name or title)[:200],
+                "url": url,
+            })
+        if len(events[output_key]) >= 5:
+            continue
+        if len(sources) >= 8:
+            continue
+
+    result = {
+        **events,
+        "sources": sources,
+        "source": "gnews",
+    }
+    travel_events_gnews_cache[cache_key] = (time.time() + 300, result)
+    return result
+
+
+@app.post("/api/travel_events")
+def travel_events():
+    data = request.get_json(silent=True) or {}
+    city = str(data.get("city", "")).strip()
+    start_date_text = str(data.get("startDate", "")).strip()
+    try:
+        days = int(data.get("days", 1))
+    except (TypeError, ValueError):
+        return jsonify({"error": "旅行天數格式不正確。"}), 400
+    if not city:
+        return jsonify({"error": "請先輸入目的地。"}), 400
+    if len(city) > 200:
+        return jsonify({"error": "目的地不可超過 200 個字。"}), 400
+    if not 1 <= days <= 14:
+        return jsonify({"error": "旅行天數需介於 1 至 14 天。"}), 400
+    try:
+        start_date = datetime.strptime(start_date_text, "%Y-%m-%d")
+    except ValueError:
+        return jsonify({"error": "出發日期格式不正確。"}), 400
+
+    trip_end = start_date + timedelta(days=days - 1)
+    window_start = shift_calendar_months(start_date, -2)
+    window_end = shift_calendar_months(trip_end, 2)
+
+    try:
+        result = search_gnews_travel_events(city, window_start, window_end)
+        return jsonify({
+            **result,
+            "fromDate": window_start.strftime("%Y-%m-%d"),
+            "toDate": window_end.strftime("%Y-%m-%d"),
+        })
+    except GNewsAPIError as error:
+        app.logger.warning("GNews travel-events search returned HTTP %s.", error.status_code)
+        if error.status_code in {401, 403}:
+            return jsonify({
+                "error": "GNews API 金鑰無效或權限不足，請確認 GNEWS_API_KEY。",
+                "errorCode": "gnews_auth_failed",
+            }), 502
+        if error.status_code == 429:
+            return jsonify({
+                "error": "GNews API 請求過多或額度不足，請稍後再試。",
+                "errorCode": "gnews_quota_exceeded",
+            }), 502
+        return jsonify({
+            "error": f"GNews API 呼叫失敗（HTTP {error.status_code}），請稍後再試。",
+            "errorCode": "gnews_request_failed",
+        }), 502
+    except RuntimeError as error:
+        if "GNEWS_API_KEY is not configured" in str(error):
+            app.logger.error("GNEWS_API_KEY is not configured.")
+            return jsonify({
+                "error": "尚未設定 GNEWS_API_KEY，請設定 GNews API key 後再試。",
+                "errorCode": "gnews_api_key_missing",
+            }), 503
+        app.logger.exception("GNews travel-events connection failed.")
+        return jsonify({
+            "error": "GNews 即時新聞服務目前無法連線，請稍後再試。",
+            "errorCode": "gnews_connection_failed",
+        }), 502
+    except Exception:
+        app.logger.exception("GNews travel-events search failed.")
+        return jsonify({
+            "error": "GNews 時事搜尋失敗，請稍後再試。",
+            "errorCode": "gnews_search_failed",
+        }), 502
+
 
 # ==========================================
 # API：獲取探索景點
