@@ -1,0 +1,884 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI 旅遊助手 - 旅途支援</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+        integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="">
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+        integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+    <link rel="stylesheet" href="{{ url_for('static', filename='responsive.css') }}">
+    <style>
+        /* 避免 Tailwind / 全站 img 規則把 Leaflet 圖磚擠壞 */
+        .support-map-wrap {
+            position: relative;
+            width: 100%;
+            height: 320px;
+            height: clamp(260px, 55vh, 460px);
+            border-radius: 1rem;
+            overflow: hidden;
+            background: #e2e8f0;
+            border: 1px solid #e2e8f0;
+        }
+
+        .support-map-tools {
+            position: absolute;
+            right: 10px;
+            bottom: 24px;
+            z-index: 500;
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+        }
+
+        .support-map-tools button {
+            background: #fff;
+            border: 1px solid #cbd5e1;
+            border-radius: 9999px;
+            padding: 6px 12px;
+            font-size: 12px;
+            font-weight: 700;
+            color: #334155;
+            box-shadow: 0 1px 4px rgba(15, 23, 42, .2);
+        }
+
+        .support-map-tools button:disabled {
+            opacity: .45;
+        }
+
+        .support-map-status {
+            position: absolute;
+            left: 50%;
+            top: 10px;
+            transform: translateX(-50%);
+            z-index: 500;
+            background: rgba(15, 23, 42, .85);
+            color: #fff;
+            font-size: 12px;
+            padding: 4px 12px;
+            border-radius: 9999px;
+            pointer-events: none;
+            white-space: nowrap;
+        }
+
+        #support-map {
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            width: 100%;
+            height: 100%;
+            margin: 0;
+            padding: 0;
+            z-index: 0;
+        }
+
+        #support-map.leaflet-container {
+            width: 100% !important;
+            height: 100% !important;
+            max-width: none !important;
+            font: inherit;
+            background: #e2e8f0;
+        }
+
+        #support-map .leaflet-pane,
+        #support-map .leaflet-map-pane,
+        #support-map .leaflet-tile-pane,
+        #support-map .leaflet-overlay-pane,
+        #support-map .leaflet-shadow-pane,
+        #support-map .leaflet-marker-pane,
+        #support-map .leaflet-tooltip-pane,
+        #support-map .leaflet-popup-pane {
+            z-index: auto;
+        }
+
+        #support-map .leaflet-map-pane {
+            position: absolute;
+            left: 0;
+            top: 0;
+        }
+
+        #support-map img.leaflet-tile,
+        #support-map .leaflet-tile {
+            max-width: none !important;
+            max-height: none !important;
+            width: 256px !important;
+            height: 256px !important;
+            min-width: 256px !important;
+            min-height: 256px !important;
+            padding: 0 !important;
+            margin: 0 !important;
+            border: none !important;
+            border-radius: 0 !important;
+            box-shadow: none !important;
+            object-fit: fill !important;
+        }
+
+        #support-map .leaflet-tile-container {
+            position: absolute;
+            left: 0;
+            top: 0;
+        }
+
+        #support-map .leaflet-control-container {
+            position: absolute;
+        }
+
+        #support-map .leaflet-control-zoom a {
+            width: 30px !important;
+            height: 30px !important;
+            line-height: 30px !important;
+            max-width: none !important;
+        }
+
+        #support-map .leaflet-marker-icon,
+        #support-map .leaflet-marker-shadow {
+            max-width: none !important;
+            max-height: none !important;
+        }
+    </style>
+</head>
+
+<body class="bg-slate-50 text-slate-800">
+    <header class="site-header">
+        <nav class="site-nav">
+            <a href="/" class="site-brand text-2xl font-bold text-blue-600">AI 旅遊助手</a>
+            <label class="nav-toggle-label" for="nav-toggle" aria-label="開啟導覽選單">☰</label>
+            <input class="nav-toggle" id="nav-toggle" type="checkbox">
+            <div class="nav-links font-medium">
+                <a href="/" class="hover:text-blue-600">首頁</a>
+                <a href="/planner" class="hover:text-blue-600">行程規劃</a>
+                <a href="/explore" class="hover:text-blue-600">探索景點</a>
+                <a href="/recognize" class="hover:text-blue-600">圖片辨識</a>
+                <a href="/support" class="hover:text-blue-600">旅途支援</a>
+                <a href="/favorites" class="hover:text-blue-600">我的收藏</a>
+                <a href="/about" class="hover:text-blue-600">關於我們</a>
+                {% if not user %}
+                <a href="/login" class="hover:text-blue-600">登入</a>
+                <a href="/register" class="hover:text-blue-600">註冊</a>
+                {% else %}
+                <span>歡迎, {{ name or user }}</span>
+                <a href="/logout" class="hover:text-blue-600">登出</a>
+                {% endif %}
+            </div>
+        </nav>
+    </header>
+
+    <div id="app">
+        <section class="max-w-3xl mx-auto px-4 py-12">
+            <div class="bg-white p-8 rounded-3xl shadow-md mb-6">
+                <h2 class="text-2xl font-bold mb-2">旅途支援</h2>
+                <p class="text-sm text-slate-500 mb-6">
+                    依目前位置查找附近公廁、無障礙廁所、垃圾桶、哺乳室與休息點。
+                    不需登入；沒有行程也能使用。可點地圖選位置，或使用瀏覽器定位。資料以 OpenStreetMap 為主，僅供參考。
+                </p>
+
+                <div v-if="insecureNotice"
+                    class="mb-4 rounded-xl border border-slate-200 bg-slate-50 px-4 py-2 text-xs text-slate-600">
+                    目前網頁不是以 HTTPS 開啟，瀏覽器可能會封鎖定位；仍可直接在地圖上點選位置搜尋。
+                </div>
+
+                <div class="flex flex-col sm:flex-row gap-3 mb-4">
+                    <button type="button" @click="locateAndSearch" :disabled="isLoading || isLocating"
+                        class="bg-slate-900 text-white px-5 py-3 rounded-xl font-bold hover:bg-slate-800 disabled:bg-slate-300">
+                        {% raw %}{{ isLocating ? '定位中...' : (isLoading ? '搜尋中...' : (coords ? '重新定位並搜尋' : '使用目前位置搜尋'))
+                        }}{% endraw %}
+                    </button>
+                    <button type="button" @click="searchOnly" :disabled="isLoading || isLocating || !coords"
+                        class="border border-slate-200 px-5 py-3 rounded-xl font-bold text-slate-700 hover:bg-slate-50 disabled:opacity-40">
+                        依地圖座標搜尋
+                    </button>
+                </div>
+
+                <div class="mb-4 relative">
+                    <label class="block text-xs font-medium text-slate-600 mb-1">輸入地點（地址、地標、車站）</label>
+                    <div class="flex gap-2">
+                        <input v-model="placeQuery" type="search" placeholder="例如：台北車站、高雄駁二、台中市政府" @input="onPlaceInput"
+                            @keydown.enter.prevent="searchPlace(true)" @keydown.esc="placeResults = []"
+                            class="flex-1 min-w-0 border border-slate-200 rounded-xl px-3 py-2 text-sm outline-none">
+                        <button type="button" @click="searchPlace(true)" :disabled="placeLoading || !placeQuery.trim()"
+                            class="border border-slate-200 px-4 py-2 rounded-xl text-sm font-bold text-slate-700 hover:bg-slate-50 disabled:opacity-40">
+                            {% raw %}{{ placeLoading ? '查詢中…' : '找地點' }}{% endraw %}
+                        </button>
+                    </div>
+                    <ul v-if="placeResults.length"
+                        class="absolute left-0 right-0 z-[1000] mt-1 bg-white border border-slate-200 rounded-xl shadow-md overflow-hidden">
+                        <li v-for="(p, i) in placeResults" :key="i">
+                            <button type="button" @click="pickPlace(p)"
+                                class="w-full text-left px-3 py-2 text-sm hover:bg-slate-50 border-b border-slate-100 last:border-b-0">
+                                <span class="font-bold text-slate-800">{% raw %}{{ p.title }}{% endraw %}</span>
+                                <span class="block text-xs text-slate-500 truncate">{% raw %}{{ p.detail }}{% endraw
+                                    %}</span>
+                            </button>
+                        </li>
+                    </ul>
+                    <p v-if="placeMessage" class="text-xs mt-1"
+                        :class="placeError ? 'text-amber-700' : 'text-slate-400'">
+                        {% raw %}{{ placeMessage }}{% endraw %}
+                    </p>
+                </div>
+
+                <div class="mb-4">
+                    <div class="flex items-center justify-between gap-2 mb-2">
+                        <label class="block text-xs font-medium text-slate-600">在地圖上點選搜尋位置</label>
+                        <span class="text-xs text-slate-400">點一下即可設定座標</span>
+                    </div>
+                    <div class="support-map-wrap border border-slate-200 shadow-inner">
+                        <div id="support-map"></div>
+                        <div v-if="isLocating" class="support-map-status">正在取得你的位置…</div>
+                        <div class="support-map-tools">
+                            <button type="button" @click="recenterMap" :disabled="!coords" title="回到搜尋中心">◎
+                                回到中心</button>
+                            <button type="button" @click="fitResults" :disabled="!results.length" title="顯示全部結果">⤢
+                                全部結果</button>
+                        </div>
+                    </div>
+                    <p class="text-xs text-slate-400 mt-2">
+                        若瀏覽器不跳出定位權限，請直接在上方地圖上點選位置，再按「依地圖座標搜尋」。
+                    </p>
+                </div>
+
+                <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-4">
+                    <div>
+                        <label class="block text-xs font-medium text-slate-600 mb-1">搜尋半徑（公尺）</label>
+                        <select v-model.number="radius"
+                            class="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm outline-none bg-white">
+                            <option :value="300">300 m</option>
+                            <option :value="500">500 m</option>
+                            <option :value="1000">1 km</option>
+                            <option :value="2000">2 km</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label class="block text-xs font-medium text-slate-600 mb-1">目前座標</label>
+                        <div class="flex gap-2">
+                            <input v-model.number="manualLat" type="number" step="any" placeholder="緯度"
+                                @change="syncCoordsFromInputs"
+                                class="w-1/2 border border-slate-200 rounded-xl px-3 py-2 text-sm outline-none">
+                            <input v-model.number="manualLng" type="number" step="any" placeholder="經度"
+                                @change="syncCoordsFromInputs"
+                                class="w-1/2 border border-slate-200 rounded-xl px-3 py-2 text-sm outline-none">
+                        </div>
+                    </div>
+                </div>
+
+                <div class="mb-4">
+                    <p class="text-xs font-medium text-slate-600 mb-2">設施類型</p>
+                    <div class="flex flex-wrap gap-2">
+                        <label v-for="opt in facilityOptions" :key="opt.id"
+                            class="inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-xs cursor-pointer"
+                            :class="selectedTypes.includes(opt.id) ? 'border-blue-500 bg-blue-50 text-blue-800' : 'border-slate-200 bg-white text-slate-600'">
+                            <input type="checkbox" class="rounded border-slate-300" :value="opt.id"
+                                v-model="selectedTypes">
+                            {% raw %}{{ opt.label }}{% endraw %}
+                        </label>
+                    </div>
+                </div>
+
+                <div class="mb-4">
+                    <p class="text-xs font-medium text-slate-600 mb-2">無障礙／族群標示（篩選有標註的項目）</p>
+                    <div class="flex flex-wrap gap-2">
+                        <label v-for="opt in accessOptions" :key="opt.id"
+                            class="inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-xs cursor-pointer"
+                            :class="accessFilters.includes(opt.id) ? 'border-emerald-500 bg-emerald-50 text-emerald-800' : 'border-slate-200 bg-white text-slate-600'">
+                            <input type="checkbox" class="rounded border-slate-300" :value="opt.id"
+                                v-model="accessFilters">
+                            {% raw %}{{ opt.label }}{% endraw %}
+                        </label>
+                    </div>
+                    <p class="text-xs text-slate-400 mt-2">OpenStreetMap 標註不完整時，篩選結果可能偏少；未勾選則顯示全部。</p>
+                </div>
+
+                <div v-if="coords"
+                    class="rounded-xl bg-slate-50 border border-slate-100 px-3 py-2 text-xs text-slate-600 mb-2">
+                    目前搜尋位置：{% raw %}{{ coords.lat.toFixed(5) }}, {{ coords.lng.toFixed(5) }}{% endraw %}
+                    <span v-if="locationSource" class="text-slate-400">（{% raw %}{{ locationSource }}{% endraw
+                        %}）</span>
+                    <span v-if="accuracyText" class="text-slate-400">· 定位誤差約 {% raw %}{{ accuracyText }}{% endraw
+                        %}</span>
+                    <span v-if="weatherHint" class="ml-2 text-blue-700">· {% raw %}{{ weatherHint }}{% endraw %}</span>
+                    <span v-if="nextStopHint" class="ml-2 text-amber-700">· {% raw %}{{ nextStopHint }}{% endraw
+                        %}</span>
+                </div>
+
+                <div v-if="errorMessage"
+                    class="mt-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-950">
+                    <p class="font-bold text-amber-900 mb-1">{% raw %}{{ errorTitle }}{% endraw %}</p>
+                    <p class="whitespace-pre-line text-amber-900/90">{% raw %}{{ errorMessage }}{% endraw %}</p>
+                </div>
+            </div>
+
+            <div v-if="isLoading" class="bg-white p-8 rounded-3xl shadow-md text-center text-slate-500">
+                正在查詢附近設施…
+            </div>
+
+            <div v-else-if="results.length" class="space-y-3">
+                <div class="flex items-center justify-between gap-2 px-1">
+                    <h3 class="font-bold text-lg">附近結果（{% raw %}{{ results.length }}{% endraw %}）</h3>
+                    <p class="text-xs text-slate-400">資料來源：OpenStreetMap / Overpass</p>
+                </div>
+                <article v-for="item in results" :key="item.id"
+                    class="bg-white p-5 rounded-3xl shadow-md border border-slate-100">
+                    <div class="flex flex-wrap items-start justify-between gap-2">
+                        <div>
+                            <p class="font-bold text-slate-800">{% raw %}{{ item.name }}{% endraw %}</p>
+                            <p class="text-xs text-slate-500 mt-1">
+                                {% raw %}{{ typeLabel(item.type) }}{% endraw %}
+                                <span v-if="item.distanceMeters != null">
+                                    · 約 {% raw %}{{ formatDistance(item.distanceMeters) }}{% endraw %}
+                                </span>
+                            </p>
+                        </div>
+                        <a :href="item.mapsUrl" target="_blank" rel="noopener"
+                            class="text-sm font-bold text-blue-600 hover:text-blue-800">導航 ↗</a>
+                    </div>
+                    <div class="mt-3 flex flex-wrap gap-2">
+                        <span v-for="tag in item.badges" :key="tag"
+                            class="rounded-full bg-slate-100 px-2 py-0.5 text-xs text-slate-600">{% raw %}{{ tag }}{%
+                            endraw %}</span>
+                        <span v-if="item.covered"
+                            class="rounded-full bg-sky-100 px-2 py-0.5 text-xs text-sky-800">有遮雨／室內</span>
+                        <span v-if="item.onRoute"
+                            class="rounded-full bg-amber-100 px-2 py-0.5 text-xs text-amber-800">往下一站較順路</span>
+                    </div>
+                    <p v-if="item.note" class="text-xs text-slate-500 mt-2">{% raw %}{{ item.note }}{% endraw %}</p>
+                </article>
+            </div>
+
+            <div v-else-if="hasSearched" class="bg-white p-8 rounded-3xl shadow-md text-center text-slate-500">
+                這個範圍內沒有找到符合條件的設施。可放大半徑或減少無障礙篩選後再試。
+            </div>
+        </section>
+    </div>
+
+    <script>
+        Vue.createApp({
+            setup() {
+                const isLoading = Vue.ref(false);
+                const errorMessage = Vue.ref('');
+                const errorTitle = Vue.ref('發生問題');
+                const isLocating = Vue.ref(false);
+                const accuracy = Vue.ref(null);
+                const isSecureCtx = window.isSecureContext
+                    || location.protocol === 'https:'
+                    || location.hostname === 'localhost'
+                    || location.hostname === '127.0.0.1';
+                const insecureNotice = !isSecureCtx;
+                const DEFAULT_CENTER = [25.033, 121.565]; // 台北市府附近（無定位時的預設視野）
+                const showError = (title, text) => {
+                    errorTitle.value = title;
+                    errorMessage.value = text;
+                };
+                const coords = Vue.ref(null);
+                const radius = Vue.ref(500);
+                const manualLat = Vue.ref(null);
+                const manualLng = Vue.ref(null);
+                const results = Vue.ref([]);
+                const hasSearched = Vue.ref(false);
+                const weatherHint = Vue.ref('');
+                const nextStopHint = Vue.ref('');
+                const locationSource = Vue.ref('');
+                const selectedTypes = Vue.ref(['toilet', 'accessible_toilet', 'drinking_water']);
+                const accessFilters = Vue.ref([]);
+                const facilityOptions = [
+                    { id: 'toilet', label: '公廁' },
+                    { id: 'accessible_toilet', label: '無障礙廁所' },
+                    { id: 'drinking_water', label: '飲水點' },
+                ];
+                const accessOptions = [
+                    { id: 'wheelchair', label: '適合輪椅' },
+                    { id: 'stroller', label: '適合嬰兒車' },
+                    { id: 'elderly', label: '長輩友善' },
+                ];
+
+                let map = null;
+                let marker = null;
+                let resultLayer = null;
+                let accuracyCircle = null;
+                let radiusCircle = null;
+                let geoRequestId = 0;
+                let layoutTimer = null;
+
+                const escapeHtml = (v) => String(v == null ? '' : v).replace(/[&<>"']/g, (ch) => ({
+                    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+                }[ch]));
+
+                const isValidLatLng = (lat, lng) => Number.isFinite(lat) && Number.isFinite(lng)
+                    && lat >= -90 && lat <= 90 && lng >= -180 && lng <= 180;
+
+                const centerIcon = () => L.divIcon({
+                    className: '',
+                    html: '<div style="width:18px;height:18px;border-radius:50%;background:#ef4444;border:3px solid #fff;box-shadow:0 0 0 2px #ef4444,0 2px 6px rgba(0,0,0,.35)"></div>',
+                    iconSize: [18, 18],
+                    iconAnchor: [9, 9],
+                    popupAnchor: [0, -10],
+                });
+
+                const typeLabel = (type) => ({
+                    toilet: '公廁',
+                    accessible_toilet: '無障礙廁所',
+                    waste_basket: '垃圾桶',
+                    bench: '休息座椅',
+                    baby_feeding: '哺乳室／育嬰',
+                    drinking_water: '飲水點',
+                }[type] || type);
+
+                const formatDistance = (meters) => {
+                    if (meters == null) return '';
+                    if (meters < 1000) return `${Math.round(meters)} m`;
+                    return `${(meters / 1000).toFixed(1)} km`;
+                };
+                const accuracyText = Vue.computed(() => (accuracy.value == null ? '' : formatDistance(accuracy.value)));
+
+                const fixMapLayout = () => {
+                    if (!map) return;
+                    try {
+                        map.invalidateSize({ pan: false });
+                    } catch (_) { /* ignore */ }
+                };
+
+                const debouncedLayout = () => {
+                    clearTimeout(layoutTimer);
+                    layoutTimer = setTimeout(fixMapLayout, 150);
+                };
+
+                const drawRadiusCircle = () => {
+                    if (!map || !coords.value) return;
+                    const ll = [coords.value.lat, coords.value.lng];
+                    if (radiusCircle) {
+                        radiusCircle.setLatLng(ll).setRadius(radius.value);
+                    } else {
+                        radiusCircle = L.circle(ll, {
+                            radius: radius.value, color: '#64748b', weight: 1, dashArray: '4 4',
+                            fill: false, interactive: false,
+                        }).addTo(map);
+                    }
+                };
+
+                const setSearchLocation = (lat, lng, source, { fly = true, acc = null } = {}) => {
+                    const next = { lat: Number(lat), lng: Number(lng) };
+                    if (!isValidLatLng(next.lat, next.lng)) {
+                        showError('座標不正確', '緯度需介於 -90～90、經度需介於 -180～180。');
+                        return false;
+                    }
+                    coords.value = next;
+                    accuracy.value = Number.isFinite(acc) ? acc : null;
+                    manualLat.value = next.lat;
+                    manualLng.value = next.lng;
+                    locationSource.value = source || '';
+                    if (map) {
+                        fixMapLayout();
+                        const ll = [next.lat, next.lng];
+                        if (fly) {
+                            map.flyTo(ll, Math.max(map.getZoom(), 16), { duration: 0.6 });
+                        } else if (!map.getBounds().pad(-0.1).contains(ll)) {
+                            map.panTo(ll);
+                        }
+                        if (marker) {
+                            marker.setLatLng(ll);
+                        } else {
+                            marker = L.marker(ll, { icon: centerIcon(), zIndexOffset: 1000, keyboard: false }).addTo(map);
+                        }
+                        // 定位誤差圈
+                        if (accuracy.value != null) {
+                            if (accuracyCircle) {
+                                accuracyCircle.setLatLng(ll).setRadius(accuracy.value);
+                            } else {
+                                accuracyCircle = L.circle(ll, {
+                                    radius: accuracy.value, color: '#3b82f6', weight: 1,
+                                    fillColor: '#3b82f6', fillOpacity: 0.12, interactive: false,
+                                }).addTo(map);
+                            }
+                        } else if (accuracyCircle) {
+                            map.removeLayer(accuracyCircle);
+                            accuracyCircle = null;
+                        }
+                        drawRadiusCircle();
+                        const accLine = accuracy.value != null ? `<br>定位誤差約 ${formatDistance(accuracy.value)}` : '';
+                        marker.bindPopup(`<strong>搜尋中心</strong>（${escapeHtml(source || '')}）<br>${next.lat.toFixed(5)}, ${next.lng.toFixed(5)}${accLine}`);
+                        if (fly) marker.openPopup();
+                    }
+                    return true;
+                };
+
+                const recenterMap = () => {
+                    if (!map || !coords.value) return;
+                    fixMapLayout();
+                    map.setView([coords.value.lat, coords.value.lng], Math.max(map.getZoom(), 16));
+                };
+
+                const fitResults = () => {
+                    if (!map) return;
+                    fixMapLayout();
+                    const pts = (results.value || [])
+                        .filter(i => i.lat != null && i.lng != null)
+                        .map(i => [Number(i.lat), Number(i.lng)]);
+                    if (coords.value) pts.push([coords.value.lat, coords.value.lng]);
+                    if (!pts.length) return;
+                    if (pts.length === 1) {
+                        map.setView(pts[0], 16);
+                        return;
+                    }
+                    map.fitBounds(L.latLngBounds(pts), { padding: [30, 30], maxZoom: 17 });
+                };
+
+                const syncCoordsFromInputs = () => {
+                    if (manualLat.value == null || manualLng.value == null
+                        || manualLat.value === '' || manualLng.value === '') return;
+                    errorMessage.value = '';
+                    setSearchLocation(manualLat.value, manualLng.value, '手動輸入');
+                };
+
+                const initMap = () => {
+                    if (map || typeof L === 'undefined') return;
+                    const el = document.getElementById('support-map');
+                    if (!el) return;
+                    // 預設視野：台灣附近，使用者可拖曳／點選
+                    map = L.map(el, {
+                        scrollWheelZoom: true,
+                        zoomControl: true,
+                        preferCanvas: false,
+                    });
+                    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                        maxZoom: 19,
+                        attribution: '&copy; <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a>',
+                        updateWhenIdle: false,
+                        updateWhenZooming: true,
+                    }).addTo(map);
+                    map.setView(DEFAULT_CENTER, 14);
+                    resultLayer = L.layerGroup().addTo(map);
+                    map.on('click', (event) => {
+                        errorMessage.value = '';
+                        fixMapLayout();
+                        setSearchLocation(event.latlng.lat, event.latlng.lng, '地圖點選', { fly: false });
+                    });
+                    map.whenReady(() => {
+                        fixMapLayout();
+                        setTimeout(fixMapLayout, 50);
+                        setTimeout(fixMapLayout, 200);
+                        setTimeout(fixMapLayout, 500);
+                        setTimeout(fixMapLayout, 1000);
+                    });
+                    window.addEventListener('resize', debouncedLayout);
+                    window.addEventListener('orientationchange', debouncedLayout);
+                    // 若外層 CSS 晚載入，load 後再修一次
+                    window.addEventListener('load', fixMapLayout);
+                    // 容器尺寸改變（如卡片展開、字體載入）時自動重算
+                    if (typeof ResizeObserver !== 'undefined') {
+                        new ResizeObserver(debouncedLayout).observe(el);
+                    }
+                };
+
+                const updateResultMarkers = (items) => {
+                    if (!map || !resultLayer) return;
+                    resultLayer.clearLayers();
+                    (items || []).forEach((item) => {
+                        if (item.lat == null || item.lng == null) return;
+                        const dot = L.circleMarker([Number(item.lat), Number(item.lng)], {
+                            radius: 7,
+                            color: '#1d4ed8',
+                            fillColor: '#3b82f6',
+                            fillOpacity: 0.85,
+                            weight: 2,
+                        });
+                        dot.bindPopup(
+                            `<strong>${escapeHtml(item.name || typeLabel(item.type))}</strong><br>`
+                            + `${escapeHtml(typeLabel(item.type))}`
+                            + (item.distanceMeters != null ? `<br>約 ${formatDistance(item.distanceMeters)}` : '')
+                            + (item.mapsUrl && /^https?:/i.test(item.mapsUrl)
+                                ? `<br><a href="${escapeHtml(item.mapsUrl)}" target="_blank" rel="noopener">導航 ↗</a>` : '')
+                        );
+                        dot.bindTooltip(escapeHtml(item.name || typeLabel(item.type)), { direction: 'top', offset: [0, -6] });
+                        resultLayer.addLayer(dot);
+                    });
+                    if ((items || []).length) fitResults();
+                };
+
+                const geolocationErrorText = (err) => {
+                    const isSecure = isSecureCtx;
+                    const code = err && typeof err.code === 'number' ? err.code : null;
+
+                    if (!isSecure) {
+                        return [
+                            '目前網站不是 HTTPS（也不是本機 localhost），多數瀏覽器會直接封鎖定位且不跳出詢問窗。',
+                            '',
+                            '你可以：',
+                            '1. 改用 https:// 開啟本站，或',
+                            '2. 直接在上方地圖點選位置，再按「依地圖座標搜尋」。',
+                        ].join('\n');
+                    }
+
+                    if (code === 1) {
+                        return [
+                            '定位權限被拒絕，或先前曾按過「封鎖」，瀏覽器因此不會再跳出詢問窗。',
+                            '',
+                            '請試著：',
+                            '1. 點網址列左側鎖頭（或設定圖示）→「位置」改為「允許」',
+                            '2. 重新整理頁面後再按「使用目前位置搜尋」',
+                            '3. 或改在地圖上點選位置後按「依地圖座標搜尋」',
+                            '',
+                            '手機請同時確認系統「定位服務」已開啟，並允許瀏覽器使用位置。',
+                        ].join('\n');
+                    }
+                    if (code === 2) {
+                        return [
+                            '裝置目前無法取得位置（可能在室內、訊號不佳，或系統定位暫時不可用）。',
+                            '',
+                            '請改在地圖上點選你附近的位置，再按「依地圖座標搜尋」。',
+                        ].join('\n');
+                    }
+                    if (code === 3) {
+                        return [
+                            '定位逾時（已等候 15 秒）。請到空曠處或靠近窗邊再試，或直接在地圖上點選位置後搜尋。',
+                        ].join('\n');
+                    }
+                    if (!navigator.geolocation) {
+                        return [
+                            '此瀏覽器不支援定位 API。',
+                            '請在地圖上點選位置，或手動輸入經緯度後搜尋。',
+                        ].join('\n');
+                    }
+                    return [
+                        '無法完成定位。',
+                        '請在地圖上點選位置，再按「依地圖座標搜尋」。',
+                    ].join('\n');
+                };
+
+                const readOptionalItineraryContext = () => {
+                    try {
+                        const keys = Object.keys(localStorage).filter(k => k.startsWith('my_travel_itinerary_'));
+                        for (const key of keys) {
+                            const raw = localStorage.getItem(key);
+                            if (!raw) continue;
+                            const parsed = JSON.parse(raw);
+                            const itinerary = Array.isArray(parsed) ? parsed : parsed?.itinerary;
+                            if (!Array.isArray(itinerary) || !itinerary.length) continue;
+                            const today = new Date().toISOString().slice(0, 10);
+                            const day = itinerary.find(d => d.date === today) || itinerary[0];
+                            const activities = Array.isArray(day?.activities) ? day.activities : [];
+                            const next = activities.find(a => typeof a === 'object' && (a.name || a.place));
+                            if (next) {
+                                return {
+                                    nextStopName: next.name || next.place || '',
+                                    nextStopLat: next.lat || null,
+                                    nextStopLng: next.lng || null,
+                                };
+                            }
+                        }
+                    } catch (_) { /* ignore */ }
+                    return null;
+                };
+
+                const buildQueryBody = () => {
+                    if (!coords.value) return null;
+                    if (!selectedTypes.value.length) {
+                        showError('請選擇設施', '請至少選擇一種設施類型。');
+                        return null;
+                    }
+                    const ctx = readOptionalItineraryContext();
+                    if (ctx?.nextStopName) {
+                        nextStopHint.value = `偵測到行程下一站參考：${ctx.nextStopName}`;
+                    } else {
+                        nextStopHint.value = '';
+                    }
+                    return {
+                        lat: coords.value.lat,
+                        lng: coords.value.lng,
+                        radius: radius.value,
+                        types: selectedTypes.value,
+                        accessFilters: accessFilters.value,
+                        nextStopLat: ctx?.nextStopLat || null,
+                        nextStopLng: ctx?.nextStopLng || null,
+                        nextStopName: ctx?.nextStopName || '',
+                    };
+                };
+
+                const searchNearby = async () => {
+                    const body = buildQueryBody();
+                    if (!body) return;
+                    isLoading.value = true;
+                    errorMessage.value = '';
+                    hasSearched.value = true;
+                    drawRadiusCircle();
+                    try {
+                        const response = await fetch('/api/nearby_facilities', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify(body),
+                        });
+                        const data = await response.json().catch(() => ({}));
+                        if (!response.ok) throw new Error(data.error || `搜尋失敗（${response.status}）`);
+                        results.value = Array.isArray(data.facilities) ? data.facilities : [];
+                        weatherHint.value = data.weatherHint || '';
+                        updateResultMarkers(results.value);
+                    } catch (error) {
+                        results.value = [];
+                        updateResultMarkers([]);
+                        showError('搜尋失敗', error.message || '搜尋失敗，請稍後再試。');
+                    } finally {
+                        isLoading.value = false;
+                    }
+                };
+
+                const locateAndSearch = () => {
+                    errorMessage.value = '';
+                    if (!navigator.geolocation || !isSecureCtx) {
+                        showError('無法使用瀏覽器定位', geolocationErrorText({ code: null }));
+                        return;
+                    }
+                    if (isLocating.value) return;
+                    isLocating.value = true;
+                    const reqId = ++geoRequestId;
+                    // 保險：部分瀏覽器在使用者忽略權限詢問時永遠不回呼
+                    const guard = setTimeout(() => {
+                        if (reqId !== geoRequestId || !isLocating.value) return;
+                        geoRequestId++;
+                        isLocating.value = false;
+                        showError('無法使用瀏覽器定位', geolocationErrorText({ code: 3 }));
+                    }, 20000);
+                    navigator.geolocation.getCurrentPosition(
+                        (pos) => {
+                            if (reqId !== geoRequestId) return;
+                            clearTimeout(guard);
+                            isLocating.value = false;
+                            const ok = setSearchLocation(
+                                pos.coords.latitude,
+                                pos.coords.longitude,
+                                '瀏覽器定位',
+                                { acc: pos.coords.accuracy }
+                            );
+                            if (ok) searchNearby();
+                        },
+                        (err) => {
+                            if (reqId !== geoRequestId) return;
+                            clearTimeout(guard);
+                            isLocating.value = false;
+                            showError('無法使用瀏覽器定位', geolocationErrorText(err));
+                        },
+                        { enableHighAccuracy: true, timeout: 15000, maximumAge: 30000 }
+                    );
+                };
+
+                const searchOnly = () => {
+                    errorMessage.value = '';
+                    if (manualLat.value != null && manualLng.value != null
+                        && manualLat.value !== '' && manualLng.value !== '') {
+                        const same = coords.value
+                            && Number(manualLat.value) === coords.value.lat
+                            && Number(manualLng.value) === coords.value.lng;
+                        if (!same) {
+                            if (!setSearchLocation(manualLat.value, manualLng.value, '手動輸入', { fly: false })) return;
+                        }
+                    }
+                    if (!coords.value) {
+                        showError('尚未設定位置', '請先在地圖上點選位置，或使用瀏覽器定位。');
+                        return;
+                    }
+                    searchNearby();
+                };
+
+                // ---- 地點輸入（Nominatim / OpenStreetMap，免金鑰） ----
+                const placeQuery = Vue.ref('');
+                const placeResults = Vue.ref([]);
+                const placeLoading = Vue.ref(false);
+                const placeMessage = Vue.ref('');
+                const placeError = Vue.ref(false);
+                let placeTimer = null;
+                let placeAbort = null;
+                let lastPlaceQuery = '';
+
+                const searchPlace = async (immediate = false) => {
+                    clearTimeout(placeTimer);
+                    const q = placeQuery.value.trim();
+                    if (!q) { placeResults.value = []; placeMessage.value = ''; return; }
+                    if (!immediate && q === lastPlaceQuery) return;
+                    // 按 Enter 且已有候選時，直接選第一個
+                    if (immediate && q === lastPlaceQuery && placeResults.value.length) {
+                        pickPlace(placeResults.value[0]);
+                        return;
+                    }
+                    lastPlaceQuery = q;
+                    if (placeAbort) placeAbort.abort();
+                    placeAbort = typeof AbortController !== 'undefined' ? new AbortController() : null;
+                    placeLoading.value = true;
+                    placeError.value = false;
+                    placeMessage.value = '查詢地點中…';
+                    try {
+                        const url = 'https://nominatim.openstreetmap.org/search?format=json&limit=5'
+                            + '&accept-language=zh-TW&q=' + encodeURIComponent(q);
+                        const res = await fetch(url, { signal: placeAbort?.signal, headers: { Accept: 'application/json' } });
+                        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+                        const data = await res.json();
+                        if (q !== placeQuery.value.trim()) return; // 使用者已改字
+                        placeResults.value = (Array.isArray(data) ? data : []).slice(0, 5).map((d) => {
+                            const parts = String(d.display_name || '').split(',').map(t => t.trim()).filter(Boolean);
+                            return {
+                                title: d.name || parts[0] || q,
+                                detail: parts.slice(d.name ? 0 : 1).join('，'),
+                                lat: Number(d.lat),
+                                lng: Number(d.lon),
+                                bbox: Array.isArray(d.boundingbox) ? d.boundingbox.map(Number) : null,
+                            };
+                        }).filter(p => isValidLatLng(p.lat, p.lng));
+                        placeMessage.value = placeResults.value.length
+                            ? '請從清單選擇地點'
+                            : '找不到這個地點，請換個關鍵字（可加上縣市名稱）。';
+                    } catch (e) {
+                        if (e && e.name === 'AbortError') return;
+                        lastPlaceQuery = '';
+                        placeResults.value = [];
+                        placeError.value = true;
+                        placeMessage.value = '地點查詢暫時無法使用，請稍後再試，或直接在地圖上點選位置。';
+                    } finally {
+                        if (q === placeQuery.value.trim()) placeLoading.value = false;
+                    }
+                };
+
+                const onPlaceInput = () => {
+                    clearTimeout(placeTimer);
+                    if (placeQuery.value.trim().length < 2) {
+                        placeResults.value = [];
+                        placeMessage.value = '';
+                        return;
+                    }
+                    placeTimer = setTimeout(() => searchPlace(false), 700);
+                };
+
+                const pickPlace = (p) => {
+                    placeResults.value = [];
+                    placeMessage.value = `已設定搜尋中心：${p.title}`;
+                    placeError.value = false;
+                    errorMessage.value = '';
+                    if (!setSearchLocation(p.lat, p.lng, `地點：${p.title}`)) return;
+                };
+
+                Vue.watch(radius, () => { if (radiusCircle) drawRadiusCircle(); });
+
+                Vue.onMounted(() => {
+                    // 等卡片與字體完成排版再初始化，減少半張地圖
+                    setTimeout(() => {
+                        initMap();
+                        setTimeout(fixMapLayout, 100);
+                    }, 0);
+                });
+
+                return {
+                    isLoading, isLocating, errorMessage, errorTitle, accuracyText, insecureNotice,
+                    recenterMap, fitResults, coords,
+                    placeQuery, placeResults, placeLoading, placeMessage, placeError,
+                    searchPlace, onPlaceInput, pickPlace, radius, manualLat, manualLng,
+                    results, hasSearched, weatherHint, nextStopHint, locationSource,
+                    selectedTypes, accessFilters, facilityOptions, accessOptions,
+                    typeLabel, formatDistance, locateAndSearch, searchOnly, syncCoordsFromInputs,
+                };
+            }
+        }).mount('#app');
+    </script>
+</body>
+
+</html>

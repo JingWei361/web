@@ -909,6 +909,17 @@ def recognize():
                            gender=current_gender)
 
 
+@app.route("/support")
+def support():
+    current_user = session.get('user')
+    current_name = session.get('name')
+    current_gender = session.get('gender')
+    return render_template("support.html",
+                           user=current_user,
+                           name=current_name,
+                           gender=current_gender)
+
+
 @app.route("/api/chat", methods=["POST"])
 def chat():
     data = request.get_json(silent=True)
@@ -1273,6 +1284,419 @@ def parse_constraints_api():
     except Exception:
         app.logger.exception("parse_constraints failed.")
         return jsonify({"error": "條件解析失敗，請稍後再試。"}), 502
+
+
+
+
+# ==========================================
+# 旅途支援：附近設施（OpenStreetMap / Overpass，免登入）
+# ==========================================
+
+OVERPASS_URL = "https://overpass-api.de/api/interpreter"
+# 主站忙碌或連不上時依序改用的備援伺服器（可用環境變數 OVERPASS_URLS 以逗號覆寫）
+OVERPASS_URLS = [u.strip() for u in os.getenv("OVERPASS_URLS", "").split(",") if u.strip()] or [
+    OVERPASS_URL,
+    "https://overpass.private.coffee/api/interpreter",
+    "https://maps.mail.ru/osm/tools/overpass/api/interpreter",
+    "https://overpass.kumi.systems/api/interpreter",
+]
+
+
+def _overpass_ssl_context():
+    """使用 certifi 憑證（若有安裝），避免本機 Python 缺少根憑證導致 SSL 驗證失敗。"""
+    import ssl
+    try:
+        import certifi
+        return ssl.create_default_context(cafile=certifi.where())
+    except Exception:
+        return ssl.create_default_context()
+
+FACILITY_OVERPASS = {
+    "toilet": 'node["amenity"="toilets"]',
+    "accessible_toilet": 'node["amenity"="toilets"]["wheelchair"="yes"]',
+    "drinking_water": 'node["amenity"="drinking_water"]',
+}
+
+
+def _haversine_meters(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    from math import radians, sin, cos, asin, sqrt
+    r = 6371000.0
+    phi1, phi2 = radians(lat1), radians(lat2)
+    dphi = radians(lat2 - lat1)
+    dl = radians(lon2 - lon1)
+    a = sin(dphi / 2) ** 2 + cos(phi1) * cos(phi2) * sin(dl / 2) ** 2
+    return 2 * r * asin(sqrt(a))
+
+
+def _facility_badges(tags: dict[str, Any], facility_type: str) -> list[str]:
+    badges: list[str] = []
+    wheelchair = str(tags.get("wheelchair") or "").lower()
+    if wheelchair in {"yes", "designated"}:
+        badges.append("適合輪椅")
+    elif wheelchair == "limited":
+        badges.append("輪椅有限可用")
+    if str(tags.get("changing_table") or "").lower() in {"yes", "limited"}:
+        badges.append("尿布台")
+    if str(tags.get("male") or "") == "yes" or str(tags.get("female") or "") == "yes":
+        badges.append("性別分隔")
+    if str(tags.get("fee") or "").lower() == "yes":
+        badges.append("可能收費")
+    if str(tags.get("fee") or "").lower() == "no":
+        badges.append("免費")
+    if facility_type == "bench" and str(tags.get("backrest") or "").lower() == "yes":
+        badges.append("有靠背")
+    if str(tags.get("covered") or "").lower() == "yes" or str(tags.get("indoor") or "").lower() == "yes":
+        badges.append("有遮蓋")
+    # 長輩友善：有座椅、無障礙或明確標註
+    if facility_type == "bench" or wheelchair in {"yes", "designated", "limited"}:
+        if "長輩友善" not in badges and (facility_type == "bench" or wheelchair in {"yes", "designated"}):
+            badges.append("長輩友善")
+    if str(tags.get("stroller") or tags.get("pushchair") or "").lower() in {"yes", "designated"}:
+        badges.append("適合嬰兒車")
+    return badges
+
+
+def _matches_access_filters(tags: dict[str, Any], badges: list[str], filters: list[str]) -> bool:
+    if not filters:
+        return True
+    tag_text = " ".join(f"{k}={v}" for k, v in tags.items()).lower()
+    badge_text = " ".join(badges)
+    for f in filters:
+        if f == "wheelchair":
+            if "適合輪椅" not in badge_text and str(tags.get("wheelchair") or "").lower() not in {"yes", "designated"}:
+                return False
+        elif f == "stroller":
+            if "適合嬰兒車" not in badge_text and "尿布台" not in badge_text:
+                if "stroller" not in tag_text and "pushchair" not in tag_text and "changing_table" not in tag_text:
+                    return False
+        elif f == "elderly":
+            if "長輩友善" not in badge_text and "適合輪椅" not in badge_text:
+                return False
+    return True
+
+
+GEOAPIFY_PLACES_URL = "https://api.geoapify.com/v2/places"
+# 設施類型 -> Geoapify Places 類別／條件（未列出者無對應類別，改用 Overpass 查詢）
+FACILITY_GEOAPIFY = {
+    "toilet": {"categories": "amenity.toilet", "amenity": "toilets"},
+    "accessible_toilet": {"categories": "amenity.toilet", "conditions": "wheelchair.yes", "amenity": "toilets"},
+    "drinking_water": {"categories": "amenity.drinking_water", "amenity": "drinking_water"},
+}
+
+
+def _geoapify_feature_to_element(feature: dict[str, Any], default_amenity: str) -> dict[str, Any] | None:
+    """把 Geoapify feature 轉成 Overpass element 形狀（tags 取自 datasource.raw 的 OSM 標籤）。"""
+    if not isinstance(feature, dict):
+        return None
+    props = feature.get("properties") or {}
+    lat_v, lon_v = props.get("lat"), props.get("lon")
+    if lat_v is None or lon_v is None:
+        coords = (feature.get("geometry") or {}).get("coordinates")
+        if isinstance(coords, list) and len(coords) >= 2 and (feature.get("geometry") or {}).get("type") == "Point":
+            lon_v, lat_v = coords[0], coords[1]
+    if lat_v is None or lon_v is None:
+        return None
+    raw = (props.get("datasource") or {}).get("raw") or {}
+    tags = {k: v for k, v in raw.items() if k not in {"osm_id", "osm_type"} and isinstance(v, (str, int, float))}
+    tags = {k: str(v) for k, v in tags.items()}
+    tags.setdefault("amenity", default_amenity)
+    if not tags.get("name") and props.get("name"):
+        tags["name"] = str(props["name"])
+    osm_type = {"n": "node", "w": "way", "r": "relation"}.get(str(raw.get("osm_type") or ""), "node")
+    el_id = raw.get("osm_id") or props.get("place_id")
+    return {"type": osm_type, "id": el_id, "lat": lat_v, "lon": lon_v, "tags": tags}
+
+
+def _fetch_geoapify_elements(types: list[str], lat: float, lng: float, radius: int, api_key: str) -> list[dict[str, Any]] | None:
+    """依類型呼叫 Geoapify Places；任一請求失敗回傳 None（由呼叫端改用 Overpass）。"""
+    ssl_ctx = _overpass_ssl_context()
+    elements: list[dict[str, Any]] = []
+    for t in types:
+        spec = FACILITY_GEOAPIFY[t]
+        params = {
+            "categories": spec["categories"],
+            "filter": f"circle:{lng},{lat},{radius}",
+            "bias": f"proximity:{lng},{lat}",
+            "limit": "40",
+            "lang": "zh",
+            "apiKey": api_key,
+        }
+        if spec.get("conditions"):
+            params["conditions"] = spec["conditions"]
+        api_request = Request(
+            f"{GEOAPIFY_PLACES_URL}?{urlencode(params)}",
+            headers={"Accept": "application/json", "User-Agent": "AITravelAssistant/1.0 (nearby-facilities)"},
+        )
+        try:
+            with urlopen(api_request, timeout=15, context=ssl_ctx) as response:
+                result = json.loads(response.read())
+        except HTTPError as error:
+            if error.code in (401, 403):
+                app.logger.error("Geoapify key invalid (HTTP %s)：請檢查 .env 的 GEOAPIFY_API_KEY", error.code)
+            else:
+                app.logger.warning("Geoapify HTTP %s for %s", error.code, t)
+            return None
+        except (URLError, TimeoutError, OSError, json.JSONDecodeError) as error:
+            app.logger.warning("Geoapify request failed for %s: %r", t, error)
+            return None
+        for feature in (result.get("features") or []) if isinstance(result, dict) else []:
+            el = _geoapify_feature_to_element(feature, spec["amenity"])
+            if el:
+                elements.append(el)
+    return elements
+
+
+def _fetch_overpass_elements(types: list[str], lat: float, lng: float, radius: int) -> tuple[list[dict[str, Any]] | None, bool]:
+    """查 Overpass（含備援伺服器）。回傳 (elements 或 None, 是否曾收到 HTTP 錯誤)。"""
+    query_parts = []
+    for t in types:
+        selector = FACILITY_OVERPASS[t]
+        query_parts.append(f'{selector}(around:{radius},{lat},{lng});')
+        query_parts.append(selector.replace("node", "way") + f"(around:{radius},{lat},{lng});")
+    query = f"""
+[out:json][timeout:25];
+(
+  {"".join(query_parts)}
+);
+out center tags 40;
+"""
+    payload = urlencode({"data": query}).encode("utf-8")
+    last_http_error = False
+    ssl_ctx = _overpass_ssl_context()
+    for endpoint in OVERPASS_URLS:
+        try:
+            api_request = Request(
+                endpoint,
+                data=payload,
+                headers={
+                    "Content-Type": "application/x-www-form-urlencoded",
+                    "Accept": "application/json",
+                    "User-Agent": "AITravelAssistant/1.0 (nearby-facilities)",
+                },
+                method="POST",
+            )
+            with urlopen(api_request, timeout=20, context=ssl_ctx) as response:
+                overpass = json.loads(response.read())
+            return overpass.get("elements") or [], last_http_error
+        except HTTPError as error:
+            last_http_error = True
+            app.logger.warning("Overpass HTTP %s from %s", error.code, endpoint)
+        except (URLError, TimeoutError, OSError, json.JSONDecodeError) as error:
+            app.logger.warning("Overpass request failed at %s: %r", endpoint, error)
+    return None, last_http_error
+
+
+def _fetch_facility_elements(types: list[str], lat: float, lng: float, radius: int) -> tuple[list[dict[str, Any]] | None, str, str]:
+    """Geoapify 為主、Overpass 為備援。回傳 (elements 或 None, source, 錯誤訊息)。"""
+    api_key = (os.getenv("GEOAPIFY_API_KEY") or "").strip()
+    geo_types = [t for t in types if t in FACILITY_GEOAPIFY]
+    overpass_types = [t for t in types if t not in FACILITY_GEOAPIFY]
+    elements: list[dict[str, Any]] = []
+    sources: list[str] = []
+    if api_key and geo_types:
+        geo = _fetch_geoapify_elements(geo_types, lat, lng, radius, api_key)
+        if geo is None:
+            overpass_types = list(types)  # Geoapify 失敗：全部改用 Overpass
+        else:
+            elements.extend(geo)
+            sources.append("geoapify")
+    else:
+        if not api_key:
+            app.logger.info("GEOAPIFY_API_KEY not set; using Overpass for nearby facilities.")
+        overpass_types = list(types)
+    if overpass_types:
+        over, http_err = _fetch_overpass_elements(overpass_types, lat, lng, radius)
+        if over is not None:
+            elements.extend(over)
+            sources.append("openstreetmap-overpass")
+        elif not sources:
+            msg = "地圖資料服務暫時無法使用，請稍後再試。" if http_err else "無法連線地圖資料服務，請稍後再試。"
+            return None, "", msg
+        else:
+            app.logger.warning("Overpass unavailable for %s; returning Geoapify results only.", overpass_types)
+    return elements, "+".join(sources), ""
+
+
+@app.post("/api/nearby_facilities")
+def nearby_facilities():
+    """依座標查詢附近生活設施。不需登入。"""
+    data = request.get_json(silent=True) or {}
+    try:
+        lat = float(data.get("lat"))
+        lng = float(data.get("lng"))
+    except (TypeError, ValueError):
+        return jsonify({"error": "請提供有效的緯度與經度。"}), 400
+    if not (-90 <= lat <= 90 and -180 <= lng <= 180):
+        return jsonify({"error": "座標超出有效範圍。"}), 400
+    try:
+        radius = max(100, min(3000, int(data.get("radius") or 500)))
+    except (TypeError, ValueError):
+        return jsonify({"error": "搜尋半徑格式不正確。"}), 400
+
+    types = data.get("types") or []
+    if not isinstance(types, list) or not types:
+        return jsonify({"error": "請至少選擇一種設施類型。"}), 400
+    types = [str(t) for t in types if str(t) in FACILITY_OVERPASS]
+    if not types:
+        return jsonify({"error": "沒有可查詢的設施類型。"}), 400
+
+    access_filters = data.get("accessFilters") or []
+    if not isinstance(access_filters, list):
+        access_filters = []
+    access_filters = [str(x) for x in access_filters]
+
+    next_lat = data.get("nextStopLat")
+    next_lng = data.get("nextStopLng")
+    try:
+        next_lat_f = float(next_lat) if next_lat is not None else None
+        next_lng_f = float(next_lng) if next_lng is not None else None
+    except (TypeError, ValueError):
+        next_lat_f = next_lng_f = None
+
+    elements, source, fetch_error = _fetch_facility_elements(types, lat, lng, radius)
+    if elements is None:
+        return jsonify({"error": fetch_error}), 502
+    facilities: list[dict[str, Any]] = []
+    seen: set[str] = set()
+
+    type_priority = {
+        "accessible_toilet": "accessible_toilet",
+        "toilet": "toilet",
+        "waste_basket": "waste_basket",
+        "bench": "bench",
+        "baby_feeding": "baby_feeding",
+        "drinking_water": "drinking_water",
+    }
+
+    for el in elements:
+        if not isinstance(el, dict):
+            continue
+        tags = el.get("tags") or {}
+        if not isinstance(tags, dict):
+            tags = {}
+        el_lat = el.get("lat")
+        el_lng = el.get("lon")
+        if el_lat is None and isinstance(el.get("center"), dict):
+            el_lat = el["center"].get("lat")
+            el_lng = el["center"].get("lon")
+        try:
+            el_lat_f = float(el_lat)
+            el_lng_f = float(el_lng)
+        except (TypeError, ValueError):
+            continue
+
+        amenity = str(tags.get("amenity") or "")
+        facility_type = "toilet"
+        if amenity == "toilets":
+            if str(tags.get("wheelchair") or "").lower() in {"yes", "designated"} and "accessible_toilet" in types:
+                facility_type = "accessible_toilet"
+            else:
+                facility_type = "toilet"
+        elif amenity == "waste_basket":
+            facility_type = "waste_basket"
+        elif amenity == "bench":
+            facility_type = "bench"
+        elif amenity in {"baby_hatch", "childcare"}:
+            facility_type = "baby_feeding"
+        elif amenity == "drinking_water":
+            facility_type = "drinking_water"
+        if facility_type not in types and not (
+            facility_type == "toilet" and "toilet" in types
+        ):
+            # allow toilet when only accessible requested already handled
+            if facility_type == "accessible_toilet" and "accessible_toilet" not in types:
+                continue
+            if facility_type not in types:
+                continue
+
+        key = f"{facility_type}:{el_lat_f:.5f}:{el_lng_f:.5f}"
+        if key in seen:
+            continue
+        seen.add(key)
+
+        badges = _facility_badges(tags, facility_type)
+        if not _matches_access_filters(tags, badges, access_filters):
+            continue
+
+        distance = _haversine_meters(lat, lng, el_lat_f, el_lng_f)
+        on_route = False
+        if next_lat_f is not None and next_lng_f is not None:
+            # 設施到「下一站」比使用者到下一站更近，或與下一站距離不大於目前距離的 1.2 倍
+            user_to_next = _haversine_meters(lat, lng, next_lat_f, next_lng_f)
+            fac_to_next = _haversine_meters(el_lat_f, el_lng_f, next_lat_f, next_lng_f)
+            on_route = fac_to_next <= user_to_next * 1.15 and fac_to_next < 1500
+
+        name = (
+            str(tags.get("name") or tags.get("name:zh") or tags.get("name:en") or "").strip()
+            or {
+                "toilet": "公共廁所",
+                "accessible_toilet": "無障礙廁所",
+                "waste_basket": "垃圾桶",
+                "bench": "休息座椅",
+                "baby_feeding": "育嬰／哺乳相關設施",
+                "drinking_water": "飲水點",
+            }.get(facility_type, "設施")
+        )
+        covered = (
+            str(tags.get("covered") or "").lower() == "yes"
+            or str(tags.get("indoor") or "").lower() == "yes"
+            or amenity in {"toilets", "childcare"}
+        )
+        note_parts = []
+        if tags.get("opening_hours"):
+            note_parts.append(f"開放時間：{tags.get('opening_hours')}")
+        if tags.get("description"):
+            note_parts.append(str(tags.get("description"))[:120])
+        facilities.append({
+            "id": f"{el.get('type', 'n')}/{el.get('id')}",
+            "type": facility_type,
+            "name": name[:80],
+            "lat": el_lat_f,
+            "lng": el_lng_f,
+            "distanceMeters": round(distance),
+            "badges": badges,
+            "covered": covered,
+            "onRoute": on_route,
+            "note": "；".join(note_parts),
+            "mapsUrl": (
+                "https://www.google.com/maps/dir/?api=1"
+                f"&destination={el_lat_f},{el_lng_f}&travelmode=walking"
+            ),
+        })
+
+    facilities.sort(key=lambda x: (not x.get("onRoute"), x.get("distanceMeters") or 10**9))
+    facilities = facilities[:30]
+
+    weather_hint = ""
+    try:
+        # 輕量：用 Open-Meteo 目前天氣，下雨時提示優先遮雨點
+        forecast = open_meteo_get_json(OPEN_METEO_FORECAST_URL, {
+            "latitude": str(lat),
+            "longitude": str(lng),
+            "current": "weather_code,precipitation",
+            "timezone": "auto",
+        })
+        current = forecast.get("current") or {}
+        code = int(current.get("weather_code") or 0)
+        precip = float(current.get("precipitation") or 0)
+        if precip > 0 or code in {51, 53, 55, 61, 63, 65, 80, 81, 82, 95, 96, 99}:
+            weather_hint = "目前可能有雨，列表中有遮雨／室內標示的設施可優先考慮"
+            facilities.sort(
+                key=lambda x: (
+                    not x.get("covered"),
+                    not x.get("onRoute"),
+                    x.get("distanceMeters") or 10**9,
+                )
+            )
+    except Exception:
+        app.logger.debug("Nearby weather hint skipped.", exc_info=True)
+
+    return jsonify({
+        "facilities": facilities,
+        "source": source,
+        "weatherHint": weather_hint,
+        "count": len(facilities),
+    })
 
 
 # ==========================================
