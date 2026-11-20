@@ -342,28 +342,20 @@ def upsert_spot_embeddings(
         })
     if not rows:
         return
-    try:
-        # Requires service-role key (typical for server-side SUPABASE_KEY)
-        # or an insert policy for authenticated users.
-        supabase.table("spot_embeddings").upsert(
-            rows,
-            on_conflict="name,city",
-        ).execute()
-    except Exception as error:
-        # Unique index is on (name, coalesce(city,'')); some clients need manual merge.
-        app.logger.warning("spot_embeddings upsert failed, trying per-row insert: %s", error)
-        for row in rows:
+    for row in rows:
             try:
-                existing = (
+                # Handle NULL city correctly (unique index uses coalesce(city, ''))
+                q = (
                     supabase.table("spot_embeddings")
                     .select("id")
                     .eq("name", row["name"])
-                    .eq("city", row["city"])
-                    .limit(1)
-                    .execute()
-                    .data
-                    or []
                 )
+                if row["city"]:
+                    q = q.eq("city", row["city"])
+                else:
+                    q = q.is_("city", "null")
+                existing = q.limit(1).execute().data or []
+    
                 if existing:
                     supabase.table("spot_embeddings").update({
                         "emoji": row["emoji"],
@@ -373,15 +365,16 @@ def upsert_spot_embeddings(
                         "metadata": row["metadata"],
                         "source": row["source"],
                     }).eq("id", existing[0]["id"]).execute()
+                    app.logger.info("Updated spot embedding: %s (%s)", row["name"], row.get("city"))
                 else:
                     supabase.table("spot_embeddings").insert(row).execute()
+                    app.logger.info("Inserted spot embedding: %s (%s)", row["name"], row.get("city"))
             except Exception as row_error:
                 app.logger.warning(
                     "Failed to persist spot embedding for %s: %s",
                     row.get("name"),
                     row_error,
                 )
-
 
 def infer_city_from_text(*parts: str) -> str | None:
     """Lightweight city hint extraction for filtering vector search."""
@@ -2915,9 +2908,9 @@ def recognize_image():
                 query_vector = embed_texts_with_gemini([query_text])[0]
                 db_hits = search_spot_embeddings(
                     query_vector,
-                    city=city_hint,
+                    city=None,
                     top_k=2,
-                    min_similarity=0.72,
+                    min_similarity=0.55,
                 )
                 if len(db_hits) >= 2:
                     similar_spots = db_hits
