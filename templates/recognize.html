@@ -21,6 +21,7 @@
                 <a href="/planner" class="hover:text-blue-600">行程規劃</a>
                 <a href="/explore" class="hover:text-blue-600">探索景點</a>
                 <a href="/recognize" class="hover:text-blue-600">圖片辨識</a>
+                <a href="/support" class="hover:text-blue-600">旅途支援</a>
                 <a href="/favorites" class="hover:text-blue-600">我的收藏</a>
                 <a href="/about" class="hover:text-blue-600">關於我們</a>
                 {% if not user %}
@@ -90,11 +91,11 @@
 
                     <h4 class="font-bold mb-4 border-b pb-2">
                         相似景點推薦
-                        <span v-if="result.vectorStore"
-                            class="ml-2 text-xs font-normal text-violet-600">
+                        <span v-if="result.vectorStore" class="ml-2 text-xs font-normal text-violet-600">
                             （Supabase 向量庫）
                         </span>
-                        <span v-else-if="result.recommendationSource && result.recommendationSource.includes('embedding')"
+                        <span
+                            v-else-if="result.recommendationSource && result.recommendationSource.includes('embedding')"
                             class="ml-2 text-xs font-normal text-slate-400">
                             （Gemini Embedding 向量相似度）
                         </span>

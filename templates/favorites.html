@@ -21,6 +21,7 @@
                 <a href="/planner" class="hover:text-blue-600">行程規劃</a>
                 <a href="/explore" class="hover:text-blue-600">探索景點</a>
                 <a href="/recognize" class="hover:text-blue-600">圖片辨識</a>
+                <a href="/support" class="hover:text-blue-600">旅途支援</a>
                 <a href="/favorites" class="hover:text-blue-600">我的收藏</a>
                 <a href="/about" class="hover:text-blue-600">關於我們</a>
                 {% if not user %}
@@ -220,8 +221,8 @@
                             </button>
                             <span class="text-xs text-slate-500">
                                 {{ isGenerationReordering
-                                    ? (hasUnsavedGenerationChanges ? '內容已變更，請完成保存' : '可調整順序或刪除景點')
-                                    : '點擊「編輯」後才能調整順序或刪除景點' }}
+                                ? (hasUnsavedGenerationChanges ? '內容已變更，請完成保存' : '可調整順序或刪除景點')
+                                : '點擊「編輯」後才能調整順序或刪除景點' }}
                             </span>
                         </div>
                         <div v-if="selectedGeneration.record.prompt" class="rounded-xl bg-blue-50 p-4">
@@ -230,8 +231,7 @@
                         </div>
                         <div v-if="selectedGenerationItinerary.length" class="space-y-3">
                             <article v-for="(day, dayIndex) in selectedGenerationItinerary"
-                                :key="`${day.day}-${dayIndex}`"
-                                class="rounded-xl border border-slate-100 p-4">
+                                :key="`${day.day}-${dayIndex}`" class="rounded-xl border border-slate-100 p-4">
                                 <div class="mb-2 flex flex-wrap items-center gap-x-3 gap-y-1">
                                     <p class="font-bold text-blue-600">第 {{ day.day }} 天</p>
                                     <p class="text-xs text-blue-500">{{ day.date || '日期未設定' }}</p>
@@ -246,46 +246,45 @@
                                 </p>
                                 <div v-if="(day.activities || []).length" class="mt-3 space-y-2">
                                     <div v-for="(activity, activityIndex) in day.activities"
-                                        :key="`${dayIndex}-${activityIndex}`"
-                                        :draggable="isGenerationReordering"
+                                        :key="`${dayIndex}-${activityIndex}`" :draggable="isGenerationReordering"
                                         @dragstart="startGenerationActivityDrag(dayIndex, activityIndex, $event)"
                                         @dragover.prevent="allowGenerationActivityDrop(dayIndex, $event)"
                                         @drop.prevent="dropGenerationActivity(dayIndex, activityIndex)"
-                                        @dragend="clearGenerationActivityDrag"
-                                        :class="draggedGenerationActivity
+                                        @dragend="clearGenerationActivityDrag" :class="draggedGenerationActivity
                                             && draggedGenerationActivity.dayIndex === dayIndex
                                             && draggedGenerationActivity.activityIndex === activityIndex
-                                            ? 'opacity-50' : ''"
-                                        class="rounded-lg bg-slate-50 px-3 py-2 text-sm">
+                                            ? 'opacity-50' : ''" class="rounded-lg bg-slate-50 px-3 py-2 text-sm">
                                         <div class="flex flex-wrap items-center gap-2">
-                                        <span aria-hidden="true" class="select-none text-slate-400">⠿</span>
-                                        <span class="font-semibold text-slate-600">
-                                            {{ typeof activity === 'string' ? activity : (activity.name ||
-                                            activity.place) }}
-                                        </span>
-                                        <span v-if="activity.category"
-                                            class="ml-2 inline-block rounded-full px-2 py-0.5 text-xs"
-                                            :class="categoryBadgeClass(activity.category)">
-                                            {{ activity.category }}
-                                        </span>
-                                        <span v-if="activity.time" class="ml-2 text-xs text-slate-500">{{ activity.time
-                                            }}</span>
-                                        <a :href="activity.mapsUrl || activityMapsUrl(activity, selectedGeneration.record.context_data?.city)"
-                                            target="_blank" rel="noopener"
-                                            class="text-xs font-bold text-blue-600 hover:text-blue-800">導航</a>
-                                        <button @click.stop="moveGenerationActivity(dayIndex, activityIndex, -1)"
-                                            :disabled="!isGenerationReordering || activityIndex === 0" type="button"
-                                            class="rounded px-1 text-slate-500 hover:bg-slate-200 disabled:cursor-not-allowed disabled:opacity-30"
-                                            :aria-label="`將第${day.day}天的景點上移`">↑</button>
-                                        <button @click.stop="moveGenerationActivity(dayIndex, activityIndex, 1)"
-                                            :disabled="!isGenerationReordering || activityIndex === day.activities.length - 1"
-                                            type="button"
-                                            class="rounded px-1 text-slate-500 hover:bg-slate-200 disabled:cursor-not-allowed disabled:opacity-30"
-                                            :aria-label="`將第${day.day}天的景點下移`">↓</button>
-                                        <button @click.stop="requestDeleteGenerationActivity(dayIndex, activityIndex)"
-                                            v-if="isGenerationReordering" type="button"
-                                            class="rounded px-1 text-red-500 hover:bg-red-100"
-                                            :aria-label="`刪除第${day.day}天的景點`">刪除</button>
+                                            <span aria-hidden="true" class="select-none text-slate-400">⠿</span>
+                                            <span class="font-semibold text-slate-600">
+                                                {{ typeof activity === 'string' ? activity : (activity.name ||
+                                                activity.place) }}
+                                            </span>
+                                            <span v-if="activity.category"
+                                                class="ml-2 inline-block rounded-full px-2 py-0.5 text-xs"
+                                                :class="categoryBadgeClass(activity.category)">
+                                                {{ activity.category }}
+                                            </span>
+                                            <span v-if="activity.time" class="ml-2 text-xs text-slate-500">{{
+                                                activity.time
+                                                }}</span>
+                                            <a :href="activity.mapsUrl || activityMapsUrl(activity, selectedGeneration.record.context_data?.city)"
+                                                target="_blank" rel="noopener"
+                                                class="text-xs font-bold text-blue-600 hover:text-blue-800">導航</a>
+                                            <button @click.stop="moveGenerationActivity(dayIndex, activityIndex, -1)"
+                                                :disabled="!isGenerationReordering || activityIndex === 0" type="button"
+                                                class="rounded px-1 text-slate-500 hover:bg-slate-200 disabled:cursor-not-allowed disabled:opacity-30"
+                                                :aria-label="`將第${day.day}天的景點上移`">↑</button>
+                                            <button @click.stop="moveGenerationActivity(dayIndex, activityIndex, 1)"
+                                                :disabled="!isGenerationReordering || activityIndex === day.activities.length - 1"
+                                                type="button"
+                                                class="rounded px-1 text-slate-500 hover:bg-slate-200 disabled:cursor-not-allowed disabled:opacity-30"
+                                                :aria-label="`將第${day.day}天的景點下移`">↓</button>
+                                            <button
+                                                @click.stop="requestDeleteGenerationActivity(dayIndex, activityIndex)"
+                                                v-if="isGenerationReordering" type="button"
+                                                class="rounded px-1 text-red-500 hover:bg-red-100"
+                                                :aria-label="`刪除第${day.day}天的景點`">刪除</button>
                                         </div>
                                         <p v-if="activity.address" class="mt-1 text-xs text-slate-500">{{
                                             activity.address }}</p>
@@ -300,9 +299,9 @@
                                 <h4 class="mb-3 font-bold text-amber-800">目的地時事與旅行注意事項</h4>
                                 <div v-if="(selectedGeneration.record.context_data.travelEvents.disruptions || []).length"
                                     class="space-y-2">
-                                    <article v-for="event in selectedGeneration.record.context_data.travelEvents.disruptions"
-                                        :key="`${event.title}-${event.date}`"
-                                        class="rounded-lg bg-white/70 p-3">
+                                    <article
+                                        v-for="event in selectedGeneration.record.context_data.travelEvents.disruptions"
+                                        :key="`${event.title}-${event.date}`" class="rounded-lg bg-white/70 p-3">
                                         <p class="font-semibold">{{ event.title }}</p>
                                         <p class="mt-1 text-xs text-slate-500">
                                             {{ event.date }}<span v-if="event.location"> · {{ event.location }}</span>
@@ -316,9 +315,9 @@
                                 <h4 class="mb-3 font-bold text-indigo-800">目的地在地文化與活動</h4>
                                 <div v-if="(selectedGeneration.record.context_data.travelEvents.culture || []).length"
                                     class="space-y-2">
-                                    <article v-for="event in selectedGeneration.record.context_data.travelEvents.culture"
-                                        :key="`${event.title}-${event.date}`"
-                                        class="rounded-lg bg-white/70 p-3">
+                                    <article
+                                        v-for="event in selectedGeneration.record.context_data.travelEvents.culture"
+                                        :key="`${event.title}-${event.date}`" class="rounded-lg bg-white/70 p-3">
                                         <p class="font-semibold">{{ event.title }}</p>
                                         <p class="mt-1 text-xs text-slate-500">
                                             {{ event.date }}<span v-if="event.location"> · {{ event.location }}</span>
@@ -338,7 +337,8 @@
                                 <div class="space-y-2">
                                     <div v-for="weather in (selectedGenerationInsights.weather || [])"
                                         :key="weather.day" class="flex justify-between gap-3 text-sm">
-                                        <span>第 {{ weather.day }} 天 · {{ weather.date }} · {{ weather.condition }}</span>
+                                        <span>第 {{ weather.day }} 天 · {{ weather.date }} · {{ weather.condition
+                                            }}</span>
                                         <span class="whitespace-nowrap text-slate-500">
                                             {{ weather.temperature }} / {{ weatherRainLabel(weather) }}
                                         </span>
@@ -421,7 +421,8 @@
                 </div>
             </div>
 
-            <div v-if="regenerateTarget" class="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 px-4"
+            <div v-if="regenerateTarget"
+                class="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 px-4"
                 @click.self="closeRegenerate">
                 <form @submit.prevent="regenerateGeneration"
                     class="w-full max-w-lg rounded-2xl bg-white p-6 shadow-2xl">
@@ -641,154 +642,154 @@
                 );
             });
         });
-            const openRegenerate = (item) => {
-                const context = item.record.context_data || {};
-                regenerateTarget.value = item;
-                regenerateConditions.value = context.conditions || '';
-            };
-            const closeRegenerate = () => {
-                if (!isRegenerating.value) regenerateTarget.value = null;
-            };
-            const loadGenerationFavorites = async () => {
-                const response = await fetch('/api/generation-favorites');
-                if (!response.ok) throw new Error('讀取行程收藏失敗。');
-                const data = await response.json();
-                generationFavorites.value = data.favorites || [];
-            };
-            const featureGeneration = async (item) => {
-                try {
-                    const response = await fetch(
-                        `/api/generation-favorites/${item.generation_record_id}/feature`,
-                        { method: 'PATCH' }
-                    );
-                    const data = await response.json().catch(() => ({}));
-                    if (!response.ok) throw new Error(data.error || '設定首選行程失敗。');
-                    await loadGenerationFavorites();
-                } catch (error) {
-                    alert(error.message || '設定首選行程失敗，請稍後再試。');
-                }
-            };
-            const regenerateGeneration = async () => {
-                const item = regenerateTarget.value;
-                if (!item || isRegenerating.value) return;
-                const record = item.record;
-                const context = record.context_data || {};
-                isRegenerating.value = true;
-                try {
-                    const response = await fetch('/api/regenerate_itinerary', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({
-                            city: context.city || record.title?.replace(/ 行程.*$/, '') || '',
-                            days: Number.isInteger(context.days) ? context.days : getItinerary(item).length,
-                            startDate: context.startDate || new Date().toISOString().slice(0, 10),
-                            budget: context.budget || '',
-                            style: context.style || 'balanced',
-                            conditions: regenerateConditions.value.trim(),
-                            includeEvents: context.includeEvents,
-                            travelEvents: context.travelEvents || null,
-                            editInstruction: `請依照以下新的旅遊條件重新生成完整行程：${regenerateConditions.value.trim()}`,
-                            itinerary: getItinerary(item)
-                        })
-                    });
-                    const data = await response.json().catch(() => ({}));
-                    if (!response.ok) throw new Error(data.error || 'AI 重新生成失敗。');
-                    const saveResponse = await fetch('/api/generations', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({
-                            city: context.city,
-                            days: data.days || context.days,
-                            startDate: context.startDate,
-                            budget: context.budget,
-                            style: context.style,
-                            conditions: regenerateConditions.value.trim(),
-                            includeEvents: context.includeEvents,
-                            parentGenerationRecordId: record.id,
-                            itinerary: data.itinerary,
-                            travelEvents: context.travelEvents || null
-                        })
-                    });
-                    const saved = await saveResponse.json().catch(() => ({}));
-                    if (!saveResponse.ok) throw new Error(saved.error || '新行程儲存失敗。');
-                    const favoriteResponse = await fetch('/api/generation-favorites', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ generationRecordId: saved.record.id })
-                    });
-                    const favoriteData = await favoriteResponse.json().catch(() => ({}));
-                    if (!favoriteResponse.ok) throw new Error(favoriteData.error || '新行程收藏失敗。');
-                    await loadGenerationFavorites();
-                    closeRegenerate();
-                    alert('已生成新的行程頁面，原本內容仍保留。');
-                } catch (error) {
-                    alert(error.message || 'AI 重新生成失敗，請稍後再試。');
-                } finally {
-                    isRegenerating.value = false;
-                }
-            };
-            const saveGenerationChanges = async () => {
-                const item = selectedGeneration.value;
-                if (!item || !hasUnsavedGenerationChanges.value || isSavingGeneration.value) return;
-                const record = item.record || {};
-                const context = record.context_data || {};
-                isSavingGeneration.value = true;
-                try {
-                    const saveResponse = await fetch('/api/generations', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({
-                            city: context.city || record.title?.replace(/ 行程.*$/, '') || '',
-                            days: selectedGenerationItinerary.value.length,
-                            startDate: context.startDate,
-                            budget: context.budget,
-                            style: context.style || 'balanced',
-                            conditions: context.conditions || '',
-                            includeEvents: context.includeEvents,
-                            parentGenerationRecordId: record.id,
-                            itinerary: selectedGenerationItinerary.value,
-                            travelEvents: context.travelEvents || null
-                        })
-                    });
-                    const saved = await saveResponse.json().catch(() => ({}));
-                    if (!saveResponse.ok) throw new Error(saved.error || '行程保存失敗。');
+        const openRegenerate = (item) => {
+            const context = item.record.context_data || {};
+            regenerateTarget.value = item;
+            regenerateConditions.value = context.conditions || '';
+        };
+        const closeRegenerate = () => {
+            if (!isRegenerating.value) regenerateTarget.value = null;
+        };
+        const loadGenerationFavorites = async () => {
+            const response = await fetch('/api/generation-favorites');
+            if (!response.ok) throw new Error('讀取行程收藏失敗。');
+            const data = await response.json();
+            generationFavorites.value = data.favorites || [];
+        };
+        const featureGeneration = async (item) => {
+            try {
+                const response = await fetch(
+                    `/api/generation-favorites/${item.generation_record_id}/feature`,
+                    { method: 'PATCH' }
+                );
+                const data = await response.json().catch(() => ({}));
+                if (!response.ok) throw new Error(data.error || '設定首選行程失敗。');
+                await loadGenerationFavorites();
+            } catch (error) {
+                alert(error.message || '設定首選行程失敗，請稍後再試。');
+            }
+        };
+        const regenerateGeneration = async () => {
+            const item = regenerateTarget.value;
+            if (!item || isRegenerating.value) return;
+            const record = item.record;
+            const context = record.context_data || {};
+            isRegenerating.value = true;
+            try {
+                const response = await fetch('/api/regenerate_itinerary', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        city: context.city || record.title?.replace(/ 行程.*$/, '') || '',
+                        days: Number.isInteger(context.days) ? context.days : getItinerary(item).length,
+                        startDate: context.startDate || new Date().toISOString().slice(0, 10),
+                        budget: context.budget || '',
+                        style: context.style || 'balanced',
+                        conditions: regenerateConditions.value.trim(),
+                        includeEvents: context.includeEvents,
+                        travelEvents: context.travelEvents || null,
+                        editInstruction: `請依照以下新的旅遊條件重新生成完整行程：${regenerateConditions.value.trim()}`,
+                        itinerary: getItinerary(item)
+                    })
+                });
+                const data = await response.json().catch(() => ({}));
+                if (!response.ok) throw new Error(data.error || 'AI 重新生成失敗。');
+                const saveResponse = await fetch('/api/generations', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        city: context.city,
+                        days: data.days || context.days,
+                        startDate: context.startDate,
+                        budget: context.budget,
+                        style: context.style,
+                        conditions: regenerateConditions.value.trim(),
+                        includeEvents: context.includeEvents,
+                        parentGenerationRecordId: record.id,
+                        itinerary: data.itinerary,
+                        travelEvents: context.travelEvents || null
+                    })
+                });
+                const saved = await saveResponse.json().catch(() => ({}));
+                if (!saveResponse.ok) throw new Error(saved.error || '新行程儲存失敗。');
+                const favoriteResponse = await fetch('/api/generation-favorites', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ generationRecordId: saved.record.id })
+                });
+                const favoriteData = await favoriteResponse.json().catch(() => ({}));
+                if (!favoriteResponse.ok) throw new Error(favoriteData.error || '新行程收藏失敗。');
+                await loadGenerationFavorites();
+                closeRegenerate();
+                alert('已生成新的行程頁面，原本內容仍保留。');
+            } catch (error) {
+                alert(error.message || 'AI 重新生成失敗，請稍後再試。');
+            } finally {
+                isRegenerating.value = false;
+            }
+        };
+        const saveGenerationChanges = async () => {
+            const item = selectedGeneration.value;
+            if (!item || !hasUnsavedGenerationChanges.value || isSavingGeneration.value) return;
+            const record = item.record || {};
+            const context = record.context_data || {};
+            isSavingGeneration.value = true;
+            try {
+                const saveResponse = await fetch('/api/generations', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        city: context.city || record.title?.replace(/ 行程.*$/, '') || '',
+                        days: selectedGenerationItinerary.value.length,
+                        startDate: context.startDate,
+                        budget: context.budget,
+                        style: context.style || 'balanced',
+                        conditions: context.conditions || '',
+                        includeEvents: context.includeEvents,
+                        parentGenerationRecordId: record.id,
+                        itinerary: selectedGenerationItinerary.value,
+                        travelEvents: context.travelEvents || null
+                    })
+                });
+                const saved = await saveResponse.json().catch(() => ({}));
+                if (!saveResponse.ok) throw new Error(saved.error || '行程保存失敗。');
 
-                    const favoriteResponse = await fetch('/api/generation-favorites', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ generationRecordId: saved.record.id })
-                    });
-                    const favoriteData = await favoriteResponse.json().catch(() => ({}));
-                    if (!favoriteResponse.ok) throw new Error(favoriteData.error || '新行程收藏失敗。');
+                const favoriteResponse = await fetch('/api/generation-favorites', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ generationRecordId: saved.record.id })
+                });
+                const favoriteData = await favoriteResponse.json().catch(() => ({}));
+                if (!favoriteResponse.ok) throw new Error(favoriteData.error || '新行程收藏失敗。');
 
-                    const deleteResponse = await fetch(
-                        `/api/generation-favorites/${item.generation_record_id}`,
-                        { method: 'DELETE' }
-                    );
-                    if (!deleteResponse.ok) {
-                        const deleteData = await deleteResponse.json().catch(() => ({}));
-                        throw new Error(deleteData.error || '原行程收藏替換失敗。');
-                    }
-
-                    await loadGenerationFavorites();
-                    const replacement = generationFavorites.value.find(
-                        favorite => favorite.generation_record_id === saved.record.id
-                    );
-                    if (replacement) {
-                        selectedGeneration.value = replacement;
-                        selectedGenerationItinerary.value = cloneItinerary(getItinerary(replacement));
-                        loadGenerationInsights(replacement);
-                    }
-                    hasUnsavedGenerationChanges.value = false;
-                    isGenerationReordering.value = false;
-                    generationEditSnapshot.value = null;
-                    alert('行程已保存，原收藏內容已更新。');
-                } catch (error) {
-                    alert(error.message || '行程保存失敗，請稍後再試。');
-                } finally {
-                    isSavingGeneration.value = false;
+                const deleteResponse = await fetch(
+                    `/api/generation-favorites/${item.generation_record_id}`,
+                    { method: 'DELETE' }
+                );
+                if (!deleteResponse.ok) {
+                    const deleteData = await deleteResponse.json().catch(() => ({}));
+                    throw new Error(deleteData.error || '原行程收藏替換失敗。');
                 }
-            };
+
+                await loadGenerationFavorites();
+                const replacement = generationFavorites.value.find(
+                    favorite => favorite.generation_record_id === saved.record.id
+                );
+                if (replacement) {
+                    selectedGeneration.value = replacement;
+                    selectedGenerationItinerary.value = cloneItinerary(getItinerary(replacement));
+                    loadGenerationInsights(replacement);
+                }
+                hasUnsavedGenerationChanges.value = false;
+                isGenerationReordering.value = false;
+                generationEditSnapshot.value = null;
+                alert('行程已保存，原收藏內容已更新。');
+            } catch (error) {
+                alert(error.message || '行程保存失敗，請稍後再試。');
+            } finally {
+                isSavingGeneration.value = false;
+            }
+        };
         const getItinerary = (item) => {
             try {
                 const content = item.record.generated_content;

@@ -938,6 +938,344 @@ def chat():
 # ==========================================
 # API：生成行程
 # ==========================================
+# 上傳補充資料 / 手打條件 → 結構化旅遊限制（非醫療）
+# ==========================================
+
+CONSTRAINT_FILE_TYPES = {
+    "preferences": "旅遊偏好／問卷",
+    "calendar": "行事曆／預約時段",
+    "past_trip": "過去旅遊資料",
+    "other": "其他補充資料",
+}
+
+
+def empty_constraints() -> dict[str, Any]:
+    return {
+        "mobility": [],
+        "pace": "",
+        "maxWalkingMinutesPerSegment": None,
+        "avoidTimeRanges": [],
+        "dietary": [],
+        "styleHints": [],
+        "mustInclude": [],
+        "mustAvoid": [],
+        "notes": "",
+        "sourceSummary": "",
+    }
+
+
+def merge_constraints(base: dict[str, Any], extra: dict[str, Any]) -> dict[str, Any]:
+    merged = empty_constraints()
+    if isinstance(base, dict):
+        for key in merged:
+            if key in base and base[key] not in (None, "", []):
+                merged[key] = base[key]
+    if not isinstance(extra, dict):
+        return merged
+
+    for key in ("mobility", "dietary", "styleHints", "mustInclude", "mustAvoid"):
+        values = []
+        for src in (merged.get(key), extra.get(key)):
+            if isinstance(src, list):
+                for item in src:
+                    text = str(item).strip()
+                    if text and text not in values:
+                        values.append(text)
+        merged[key] = values
+
+    ranges = []
+    for src in (merged.get("avoidTimeRanges"), extra.get("avoidTimeRanges")):
+        if not isinstance(src, list):
+            continue
+        for item in src:
+            if not isinstance(item, dict):
+                continue
+            date = str(item.get("date") or "").strip()
+            start = str(item.get("start") or "").strip()
+            end = str(item.get("end") or "").strip()
+            reason = str(item.get("reason") or "").strip()
+            if date or start or end:
+                ranges.append({
+                    "date": date[:20],
+                    "start": start[:10],
+                    "end": end[:10],
+                    "reason": reason[:120],
+                })
+    merged["avoidTimeRanges"] = ranges[:20]
+
+    pace = str(extra.get("pace") or merged.get("pace") or "").strip()
+    merged["pace"] = pace[:40]
+
+    walk = extra.get("maxWalkingMinutesPerSegment")
+    if walk is None:
+        walk = merged.get("maxWalkingMinutesPerSegment")
+    try:
+        walk_int = int(walk) if walk is not None and str(walk).strip() != "" else None
+        if walk_int is not None and walk_int < 0:
+            walk_int = None
+        merged["maxWalkingMinutesPerSegment"] = walk_int
+    except (TypeError, ValueError):
+        merged["maxWalkingMinutesPerSegment"] = None
+
+    notes_parts = [
+        str(merged.get("notes") or "").strip(),
+        str(extra.get("notes") or "").strip(),
+    ]
+    merged["notes"] = "；".join(p for p in notes_parts if p)[:800]
+
+    summary_parts = [
+        str(merged.get("sourceSummary") or "").strip(),
+        str(extra.get("sourceSummary") or "").strip(),
+    ]
+    merged["sourceSummary"] = "；".join(p for p in summary_parts if p)[:800]
+    return merged
+
+
+def constraints_to_prompt_text(constraints: dict[str, Any]) -> str:
+    if not isinstance(constraints, dict):
+        return ""
+    lines: list[str] = []
+    if constraints.get("pace"):
+        lines.append(f"行程節奏：{constraints['pace']}")
+    if constraints.get("maxWalkingMinutesPerSegment") is not None:
+        lines.append(
+            f"每段步行上限約 {constraints['maxWalkingMinutesPerSegment']} 分鐘"
+        )
+    for key, label in (
+        ("mobility", "行動與體力限制"),
+        ("dietary", "飲食限制"),
+        ("styleHints", "風格偏好"),
+        ("mustInclude", "希望安排"),
+        ("mustAvoid", "希望避開"),
+    ):
+        items = constraints.get(key) or []
+        if isinstance(items, list) and items:
+            lines.append(f"{label}：{'、'.join(str(x) for x in items[:12])}")
+    ranges = constraints.get("avoidTimeRanges") or []
+    if isinstance(ranges, list) and ranges:
+        parts = []
+        for item in ranges[:12]:
+            if not isinstance(item, dict):
+                continue
+            date = str(item.get("date") or "").strip()
+            start = str(item.get("start") or "").strip()
+            end = str(item.get("end") or "").strip()
+            reason = str(item.get("reason") or "").strip()
+            slot = " ".join(
+                p for p in (date, f"{start}-{end}" if start or end else "") if p
+            )
+            if reason:
+                slot = f"{slot}（{reason}）" if slot else reason
+            if slot:
+                parts.append(slot)
+        if parts:
+            lines.append("需避開時段：" + "；".join(parts))
+    if constraints.get("notes"):
+        lines.append(f"其他說明：{constraints['notes']}")
+    if constraints.get("sourceSummary"):
+        lines.append(f"資料來源摘要：{constraints['sourceSummary']}")
+    return "\n".join(lines)
+
+
+def parse_constraints_from_texts(
+    *,
+    typed_conditions: str,
+    file_texts: list[dict[str, str]],
+    city: str = "",
+    start_date: str = "",
+    days: int | None = None,
+) -> dict[str, Any]:
+    typed = (typed_conditions or "").strip()
+    files_payload = []
+    for item in file_texts or []:
+        if not isinstance(item, dict):
+            continue
+        text = str(item.get("text") or "").strip()
+        if not text:
+            continue
+        files_payload.append({
+            "type": str(item.get("type") or "other").strip() or "other",
+            "filename": str(item.get("filename") or "").strip()[:200],
+            "text": text[:12000],
+        })
+
+    if not typed and not files_payload:
+        return empty_constraints()
+
+    prompt = f"""
+你是旅遊規劃助手。請把使用者的「手打旅遊條件」與「上傳補充資料」整理成結構化限制，供後續排行程使用。
+不要給醫療診斷、用藥建議或健康判斷；只抽取可操作的旅遊安排限制與偏好。
+目的地：{city or '未指定'}
+出發日：{start_date or '未指定'}
+天數：{days if days is not None else '未指定'}
+
+手打條件：
+「{typed or '（無）'}」
+
+上傳檔案內容（可能含偏好問卷、行事曆、過去旅遊紀錄）：
+{json.dumps(files_payload, ensure_ascii=False)}
+
+只回傳 JSON（不要 Markdown）：
+{{
+  "mobility": ["例如：希望少走路、需要較多休息"],
+  "pace": "slow|balanced|packed 或簡短中文節奏描述，沒有則空字串",
+  "maxWalkingMinutesPerSegment": null 或整數分鐘,
+  "avoidTimeRanges": [
+    {{"date":"YYYY-MM-DD 或空","start":"HH:MM 或空","end":"HH:MM 或空","reason":"會議/預約等"}}
+  ],
+  "dietary": ["素食","不吃牛"等],
+  "styleHints": ["親子","購物少一點"],
+  "mustInclude": ["想去的類型或地點關鍵字"],
+  "mustAvoid": ["不想去的類型"],
+  "notes": "其他精簡說明",
+  "sourceSummary": "用繁中 1～3 句說明你從手打與上傳資料整理出的重點"
+}}
+規則：
+- 無法確定的欄位用 []、"" 或 null。
+- avoidTimeRanges 只在有明確日期或時段時填寫。
+- 不要捏造使用者沒寫的限制。
+"""
+    result = generate_gemini_json(prompt)
+    if not isinstance(result, dict):
+        raise ValueError("Invalid constraints JSON shape.")
+    return merge_constraints(empty_constraints(), result)
+
+
+def extract_text_from_upload(file_bytes: bytes, filename: str, mime_type: str | None) -> str:
+    extension = os.path.splitext(filename)[1].lower()
+    try:
+        if extension == ".txt" or (mime_type or "").startswith("text/"):
+            try:
+                return file_bytes.decode("utf-8-sig").strip()
+            except UnicodeDecodeError:
+                return file_bytes.decode("cp950").strip()
+        if extension == ".docx":
+            document = Document(BytesIO(file_bytes))
+            paragraphs = [
+                paragraph.text.strip()
+                for paragraph in document.paragraphs
+                if paragraph.text.strip()
+            ]
+            table_rows = [
+                " | ".join(cell.text.strip() for cell in row.cells)
+                for table in document.tables
+                for row in table.rows
+            ]
+            return "\n".join(paragraphs + [row for row in table_rows if row]).strip()
+        if extension == ".pdf":
+            reader = PdfReader(BytesIO(file_bytes))
+            return "\n".join(page.extract_text() or "" for page in reader.pages).strip()
+        if extension == ".ics":
+            try:
+                return file_bytes.decode("utf-8-sig").strip()
+            except UnicodeDecodeError:
+                return file_bytes.decode("utf-8", errors="ignore").strip()
+        try:
+            return file_bytes.decode("utf-8-sig").strip()
+        except UnicodeDecodeError:
+            try:
+                return file_bytes.decode("cp950").strip()
+            except UnicodeDecodeError:
+                return ""
+    except Exception:
+        app.logger.exception("Constraint file text extraction failed.")
+        return ""
+
+
+@app.post("/api/parse_constraints")
+def parse_constraints_api():
+    """解析手打條件與上傳檔案為結構化旅遊限制。"""
+    city = ""
+    start_date = ""
+    days = None
+    typed_conditions = ""
+    file_texts: list[dict[str, str]] = []
+
+    if request.content_type and "multipart/form-data" in request.content_type:
+        typed_conditions = str(request.form.get("conditions") or "").strip()
+        city = str(request.form.get("city") or "").strip()
+        start_date = str(request.form.get("startDate") or "").strip()
+        file_type = str(request.form.get("fileType") or "other").strip() or "other"
+        if file_type not in CONSTRAINT_FILE_TYPES:
+            return jsonify({"error": "不支援的檔案類型。"}), 400
+        try:
+            days_raw = request.form.get("days")
+            days = int(days_raw) if days_raw not in (None, "") else None
+        except (TypeError, ValueError):
+            return jsonify({"error": "天數格式不正確。"}), 400
+
+        uploads = request.files.getlist("file")
+        for uploaded in uploads:
+            if uploaded is None or not uploaded.filename:
+                continue
+            filename = secure_filename(uploaded.filename) or f"upload-{uuid4().hex}.txt"
+            raw = uploaded.read()
+            if not raw:
+                continue
+            if len(raw) > 10 * 1024 * 1024:
+                return jsonify({"error": f"檔案 {filename} 超過 10MB。"}), 413
+            text = extract_text_from_upload(raw, filename, uploaded.mimetype)
+            if not text:
+                return jsonify({"error": f"無法讀取檔案文字：{filename}"}), 422
+            file_texts.append({
+                "type": file_type,
+                "filename": filename,
+                "text": text[:12000],
+            })
+    else:
+        data = request.get_json(silent=True) or {}
+        typed_conditions = str(data.get("conditions") or "").strip()
+        city = str(data.get("city") or "").strip()
+        start_date = str(data.get("startDate") or "").strip()
+        try:
+            days = int(data["days"]) if data.get("days") not in (None, "") else None
+        except (TypeError, ValueError):
+            return jsonify({"error": "天數格式不正確。"}), 400
+        for item in data.get("files") or []:
+            if not isinstance(item, dict):
+                continue
+            text = str(item.get("text") or "").strip()
+            if not text:
+                continue
+            ftype = str(item.get("type") or "other").strip() or "other"
+            if ftype not in CONSTRAINT_FILE_TYPES:
+                ftype = "other"
+            file_texts.append({
+                "type": ftype,
+                "filename": str(item.get("filename") or "")[:200],
+                "text": text[:12000],
+            })
+
+    if len(typed_conditions) > 1000:
+        return jsonify({"error": "旅遊條件不可超過 1000 個字。"}), 400
+    if not typed_conditions and not file_texts:
+        return jsonify({"error": "請先輸入條件或上傳檔案。"}), 400
+
+    try:
+        constraints = parse_constraints_from_texts(
+            typed_conditions=typed_conditions,
+            file_texts=file_texts,
+            city=city,
+            start_date=start_date,
+            days=days,
+        )
+        prompt_text = constraints_to_prompt_text(constraints)
+        return jsonify({
+            "constraints": constraints,
+            "promptText": prompt_text,
+            "filesParsed": len(file_texts),
+        })
+    except RuntimeError as error:
+        if "GEMINI_API_KEY is not configured" in str(error):
+            return jsonify({"error": "Gemini API 尚未設定，無法解析條件。"}), 503
+        app.logger.exception("parse_constraints failed.")
+        return jsonify({"error": "條件解析失敗，請稍後再試。"}), 502
+    except Exception:
+        app.logger.exception("parse_constraints failed.")
+        return jsonify({"error": "條件解析失敗，請稍後再試。"}), 502
+
+
+# ==========================================
 @app.route("/api/generate_itinerary", methods=['POST'])
 def generate_itinerary():
     data = request.get_json(silent=True) or {}
@@ -948,6 +1286,16 @@ def generate_itinerary():
     include_events = data.get('includeEvents') is True
     travel_events = data.get('travelEvents') if isinstance(data.get('travelEvents'), dict) else None
     budget = data.get('budget')
+    raw_constraints = data.get('constraints') if isinstance(data.get('constraints'), dict) else None
+    constraints = merge_constraints(empty_constraints(), raw_constraints) if raw_constraints else empty_constraints()
+    constraints_text = constraints_to_prompt_text(constraints)
+    combined_conditions = conditions
+    if constraints_text:
+        combined_conditions = (
+            f"{conditions}\n\n【已解析的結構化限制】\n{constraints_text}"
+            if conditions else
+            f"【已解析的結構化限制】\n{constraints_text}"
+        )
     if len(conditions) > 1000:
         return jsonify({'error': '旅遊條件不可超過 1000 個字。'}), 400
     try:
@@ -964,7 +1312,7 @@ def generate_itinerary():
     prompt = f"""
 規劃{city} {days}天旅行，日期從{start_date.strftime('%Y-%m-%d')}開始，風格：{style}，預算：{budget or '未指定'} TWD。
 旅客的額外條件與特殊需求如下，必須優先遵守並反映在行程安排中：
-「{conditions or '無額外條件'}」
+「{combined_conditions or '無額外條件'}」
 {"只有在行程日期內確定有目的地的節慶、文化祭典、展覽、市集或在地文化活動時，才加入行程；需確認活動日期與地點，並合理安排在對應日期，不要加入交通災害、抗議、一般新聞或無法確認日期的活動。若找不到相符活動，不要勉強新增活動，維持一般景點與餐飲安排。" if include_events else "除非旅客另有指定，不需要將節慶、展覽、市集或在地文化活動加入行程。"}
 {f"可參考的在地文化與節慶搜尋資料（僅在活動日期確實落在旅行期間且地點屬於目的地時採用）：{json.dumps(travel_events.get('culture') or [], ensure_ascii=False)}" if include_events and travel_events else ""}
 如果條件與一般建議衝突，請以旅客條件為準；無法滿足時，請在當天 description 說明原因並提供替代方案。
@@ -1998,6 +2346,16 @@ def regenerate_itinerary():
     include_events = data.get('includeEvents') is True
     travel_events = data.get('travelEvents') if isinstance(data.get('travelEvents'), dict) else None
     itinerary = data.get('itinerary')
+    raw_constraints = data.get('constraints') if isinstance(data.get('constraints'), dict) else None
+    constraints = merge_constraints(empty_constraints(), raw_constraints) if raw_constraints else empty_constraints()
+    constraints_text = constraints_to_prompt_text(constraints)
+    combined_conditions = conditions
+    if constraints_text:
+        combined_conditions = (
+            f"{conditions}\n\n【已解析的結構化限制】\n{constraints_text}"
+            if conditions else
+            f"【已解析的結構化限制】\n{constraints_text}"
+        )
     try:
         days = max(1, min(14, int(data.get('days', len(itinerary or [])))))
     except (TypeError, ValueError):
@@ -2020,7 +2378,7 @@ def regenerate_itinerary():
 請根據旅客的修改要求，重新生成完整的 {city} {days} 天旅遊行程。
 出發日期：{start_date.strftime('%Y-%m-%d')}
 旅行風格：{style}；預算：{data.get('budget') or '未指定'} TWD。
-特殊條件：{conditions or '無額外條件'}。
+特殊條件：{combined_conditions or '無額外條件'}。
 {"僅當目的地在行程日期內確定有節慶、文化祭典、展覽、市集或在地文化活動時，才加入對應日期；必須確認活動日期與地點，不要加入一般時事、交通災害、無法確認日期的活動或臆測活動；找不到相符活動時維持一般景點安排。" if include_events else "除非旅客修改需求明確要求，行程不需加入節慶、展覽、市集或在地文化活動。"}
 {f"可參考的在地文化與節慶搜尋資料（僅在活動日期落在旅行期間且地點屬於目的地時採用）：{json.dumps(travel_events.get('culture') or [], ensure_ascii=False)}" if include_events and travel_events else ""}
 旅客想要修改的內容：

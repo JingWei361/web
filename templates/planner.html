@@ -48,6 +48,7 @@
                 <a href="/planner" class="hover:text-blue-600">行程規劃</a>
                 <a href="/explore" class="hover:text-blue-600">探索景點</a>
                 <a href="/recognize" class="hover:text-blue-600">圖片辨識</a>
+                <a href="/support" class="hover:text-blue-600">旅途支援</a>
                 <a href="/favorites" class="hover:text-blue-600">我的收藏</a>
                 <a href="/about" class="hover:text-blue-600">關於我們</a>
                 {% if not user %}
@@ -111,14 +112,75 @@
                     <textarea v-model="form.conditions" rows="3" maxlength="1000"
                         placeholder="例如：帶 6 歲小孩、需要無障礙路線、每天不要走超過 10,000 步、想吃素食、避開排隊景點..."
                         class="w-full border border-slate-200 rounded-xl px-4 py-2 focus:ring-2 focus:ring-blue-500 outline-none resize-y"></textarea>
-                    <p class="text-xs text-slate-400 mt-1">AI 會依照這些條件調整景點、順序、交通與行程節奏。</p>
+                    <p class="text-xs text-slate-400 mt-1">AI 會依照這些條件調整景點、順序、交通與行程節奏。也可點下方「解析條件與檔案」整理成結構化限制。</p>
                 </div>
+
+                <!-- 上傳補充資料 + 解析（非醫療） -->
+                <div class="mb-6 rounded-2xl border border-slate-200 bg-slate-50/80 p-4 space-y-3">
+                    <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+                        <div>
+                            <h3 class="text-sm font-bold text-slate-700">上傳補充資料（選填）</h3>
+                            <p class="text-xs text-slate-500 mt-0.5">支援偏好問卷、行事曆、過去旅遊紀錄（txt / pdf / docx /
+                                ics）。手打條件可一併解析。</p>
+                        </div>
+                        <button type="button" @click="parseConstraints" :disabled="isParsingConstraints"
+                            class="shrink-0 rounded-xl bg-blue-600 px-4 py-2 text-sm font-bold text-white hover:bg-blue-700 disabled:bg-slate-300">
+                            {% raw %}{{ isParsingConstraints ? '解析中...' : '解析條件與檔案' }}{% endraw %}
+                        </button>
+                    </div>
+
+                    <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        <div>
+                            <label class="block text-xs font-medium text-slate-600 mb-1">檔案類型</label>
+                            <select v-model="uploadFileType"
+                                class="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm outline-none bg-white">
+                                <option value="preferences">旅遊偏好／問卷</option>
+                                <option value="calendar">行事曆／預約時段</option>
+                                <option value="past_trip">過去旅遊資料</option>
+                                <option value="other">其他補充資料</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label class="block text-xs font-medium text-slate-600 mb-1">選擇檔案</label>
+                            <input type="file" multiple accept=".txt,.pdf,.docx,.ics,text/plain,application/pdf"
+                                @change="onConstraintFilesSelected"
+                                class="block w-full text-sm text-slate-600 file:mr-3 file:rounded-lg file:border-0 file:bg-slate-200 file:px-3 file:py-1.5 file:text-sm file:font-semibold">
+                        </div>
+                    </div>
+
+                    <ul v-if="constraintFiles.length" class="space-y-1">
+                        <li v-for="(f, idx) in constraintFiles" :key="`${f.name}-${idx}`"
+                            class="flex items-center justify-between gap-2 rounded-lg bg-white px-3 py-2 text-xs text-slate-600 border border-slate-100">
+                            <span class="truncate">{% raw %}{{ f.name }} · {{ fileTypeLabel(f.type) }}{% endraw
+                                %}</span>
+                            <button type="button" @click="removeConstraintFile(idx)"
+                                class="shrink-0 font-bold text-red-500 hover:text-red-700">移除</button>
+                        </li>
+                    </ul>
+
+                    <p v-if="constraintsError" class="text-sm font-semibold text-red-600">{% raw %}{{ constraintsError
+                        }}{% endraw %}</p>
+
+                    <div v-if="parsedConstraints && parsedConstraintsPrompt"
+                        class="rounded-xl border border-emerald-100 bg-emerald-50/80 px-3 py-3 text-sm text-slate-700">
+                        <div class="flex items-start justify-between gap-2 mb-1">
+                            <p class="font-bold text-emerald-800">已解析的行程限制</p>
+                            <button type="button" @click="clearParsedConstraints"
+                                class="text-xs font-bold text-slate-500 hover:text-slate-700">清除</button>
+                        </div>
+                        <pre
+                            class="whitespace-pre-wrap text-xs text-slate-600 font-sans">{% raw %}{{ parsedConstraintsPrompt }}{% endraw %}</pre>
+                        <p class="text-xs text-slate-500 mt-2">生成行程時會一併套用；你仍可在上方修改手打條件後再解析。</p>
+                    </div>
+                </div>
+
                 <label class="mb-6 flex items-start gap-3 rounded-xl border border-slate-200 px-4 py-3">
                     <input v-model="form.includeEvents" type="checkbox"
                         class="mt-0.5 h-4 w-4 rounded border-slate-300 text-blue-600">
                     <span>
                         <span class="block text-sm font-bold text-slate-700">加入行程期間的節慶與文化活動</span>
-                        <span class="block text-xs text-slate-500 mt-1">若目的地在你的行程日期內有確定的節慶、展覽、市集或文化活動，將活動納入行程；沒有相符活動就保持一般景點安排。</span>
+                        <span
+                            class="block text-xs text-slate-500 mt-1">若目的地在你的行程日期內有確定的節慶、展覽、市集或文化活動，將活動納入行程；沒有相符活動就保持一般景點安排。</span>
                     </span>
                 </label>
 
@@ -174,16 +236,13 @@
                                 <p v-if="day.description" class="text-sm text-slate-600 mt-2">{{ day.description }}</p>
                                 <div class="mt-3 space-y-2">
                                     <div v-for="(activity, activityIndex) in (day.activities || [])"
-                                        :key="`${index}-${activityIndex}`"
-                                        :draggable="isReordering"
+                                        :key="`${index}-${activityIndex}`" :draggable="isReordering"
                                         @dragstart="startActivityDrag(index, activityIndex, $event)"
                                         @dragover.prevent="allowActivityDrop(index, $event)"
-                                        @drop.prevent="dropActivity(index, activityIndex)"
-                                        @dragend="clearActivityDrag"
+                                        @drop.prevent="dropActivity(index, activityIndex)" @dragend="clearActivityDrag"
                                         :class="draggedActivity && draggedActivity.dayIndex === index
                                             && draggedActivity.activityIndex === activityIndex
-                                            ? 'opacity-50' : ''"
-                                        class="rounded-xl bg-slate-50 px-3 py-2 text-sm">
+                                            ? 'opacity-50' : ''" class="rounded-xl bg-slate-50 px-3 py-2 text-sm">
                                         <div class="flex flex-wrap items-center gap-2">
                                             <span aria-hidden="true" class="select-none text-slate-400">⠿</span>
                                             <span class="font-semibold text-slate-700">{{ activityLabel(activity)
@@ -192,8 +251,7 @@
                                                 class="rounded-full bg-amber-100 px-2 py-0.5 text-xs text-amber-800">
                                                 {{ activity.meal }}
                                             </span>
-                                            <span v-if="activity.category"
-                                                class="rounded-full px-2 py-0.5 text-xs"
+                                            <span v-if="activity.category" class="rounded-full px-2 py-0.5 text-xs"
                                                 :class="categoryBadgeClass(activity.category)">
                                                 {{ activity.category }}
                                             </span>
@@ -215,9 +273,8 @@
                                                 class="rounded px-1 text-red-500 hover:bg-red-100"
                                                 :aria-label="`刪除${activityLabel(activity)}`">刪除</button>
                                         </div>
-                                        <a v-if="activityIndex > 0"
-                                            :href="activityTransportUrl(day, activityIndex)" target="_blank"
-                                            rel="noopener"
+                                        <a v-if="activityIndex > 0" :href="activityTransportUrl(day, activityIndex)"
+                                            target="_blank" rel="noopener"
                                             class="mt-1 inline-block text-xs font-bold text-cyan-700 hover:text-cyan-900">
                                             🚆 查詢上一站到此處的大眾運輸
                                         </a>
@@ -294,8 +351,7 @@
                     <p v-if="replanMessage" class="text-sm text-green-600 mt-3">{{ replanMessage }}</p>
                 </div>
 
-                <div v-if="isLoadingEvents || travelEvents || eventsError"
-                    class="bg-white p-8 rounded-3xl shadow-md">
+                <div v-if="isLoadingEvents || travelEvents || eventsError" class="bg-white p-8 rounded-3xl shadow-md">
                     <div class="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-2 mb-5">
                         <div>
                             <h3 class="text-xl font-bold">目的地時事與在地活動</h3>
@@ -315,17 +371,16 @@
                         <section>
                             <h4 class="font-bold text-base text-amber-800 mb-3">旅行注意事項</h4>
                             <div v-if="travelEvents.disruptions.length" class="space-y-3">
-                                <article v-for="event in travelEvents.disruptions"
-                                    :key="`${event.title}-${event.date}`"
+                                <article v-for="event in travelEvents.disruptions" :key="`${event.title}-${event.date}`"
                                     class="rounded-xl border border-amber-100 bg-amber-50 p-4">
-                                            <div class="flex items-start justify-between gap-2">
-                                                <p class="font-semibold">{{ eventDisplay(event).title }}</p>
-                                                <button v-if="event.originalTitle || event.originalDescription"
-                                                    @click="toggleEventTranslation(event)" type="button"
-                                                    class="shrink-0 rounded-full border border-amber-200 bg-white px-2 py-1 text-xs font-bold text-amber-700">
-                                                    {{ event.showOriginal ? '顯示中文' : '查看原文' }}
-                                                </button>
-                                            </div>
+                                    <div class="flex items-start justify-between gap-2">
+                                        <p class="font-semibold">{{ eventDisplay(event).title }}</p>
+                                        <button v-if="event.originalTitle || event.originalDescription"
+                                            @click="toggleEventTranslation(event)" type="button"
+                                            class="shrink-0 rounded-full border border-amber-200 bg-white px-2 py-1 text-xs font-bold text-amber-700">
+                                            {{ event.showOriginal ? '顯示中文' : '查看原文' }}
+                                        </button>
+                                    </div>
                                     <p class="text-xs text-slate-600 mt-1">
                                         {{ event.date }}<span v-if="event.location"> · {{ event.location }}</span>
                                         <span v-if="event.status"> · {{ event.status }}</span>
@@ -338,8 +393,7 @@
                         <section>
                             <h4 class="font-bold text-base text-indigo-800 mb-3">在地文化與節慶</h4>
                             <div v-if="travelEvents.culture.length" class="space-y-3">
-                                <article v-for="event in travelEvents.culture"
-                                    :key="`${event.title}-${event.date}`"
+                                <article v-for="event in travelEvents.culture" :key="`${event.title}-${event.date}`"
                                     class="rounded-xl border border-indigo-100 bg-indigo-50 p-4">
                                     <div class="flex items-start justify-between gap-2">
                                         <p class="font-semibold">{{ eventDisplay(event).title }}</p>
@@ -696,6 +750,75 @@
             conditions: '',
             includeEvents: true
         });
+        const uploadFileType = Vue.ref('preferences');
+        const constraintFiles = Vue.ref([]);
+        const isParsingConstraints = Vue.ref(false);
+        const constraintsError = Vue.ref('');
+        const parsedConstraints = Vue.ref(null);
+        const parsedConstraintsPrompt = Vue.ref('');
+        const fileTypeLabel = (type) => ({
+            preferences: '旅遊偏好／問卷',
+            calendar: '行事曆／預約時段',
+            past_trip: '過去旅遊資料',
+            other: '其他補充資料',
+        }[type] || '其他');
+        const onConstraintFilesSelected = (event) => {
+            const list = Array.from(event.target.files || []);
+            list.forEach((file) => {
+                constraintFiles.value.push({
+                    name: file.name,
+                    type: uploadFileType.value,
+                    file,
+                });
+            });
+            event.target.value = '';
+        };
+        const removeConstraintFile = (index) => {
+            constraintFiles.value.splice(index, 1);
+        };
+        const clearParsedConstraints = () => {
+            parsedConstraints.value = null;
+            parsedConstraintsPrompt.value = '';
+            constraintsError.value = '';
+        };
+        const parseConstraints = async () => {
+            const typed = (form.conditions || '').trim();
+            if (!typed && !constraintFiles.value.length) {
+                constraintsError.value = '請先輸入旅遊條件，或選擇要上傳的檔案。';
+                return;
+            }
+            isParsingConstraints.value = true;
+            constraintsError.value = '';
+            try {
+                const body = new FormData();
+                body.append('conditions', typed);
+                body.append('city', form.city || '');
+                body.append('startDate', form.startDate || '');
+                body.append('days', String(form.days || 1));
+                if (constraintFiles.value.length) {
+                    body.append('fileType', constraintFiles.value[0].type || 'other');
+                    constraintFiles.value.forEach((item) => {
+                        body.append('file', item.file, item.name);
+                    });
+                }
+                const response = await fetch('/api/parse_constraints', {
+                    method: 'POST',
+                    body,
+                });
+                const data = await response.json().catch(() => ({}));
+                if (!response.ok) {
+                    throw new Error(data.error || '條件解析失敗');
+                }
+                parsedConstraints.value = data.constraints || null;
+                parsedConstraintsPrompt.value = data.promptText || '';
+            } catch (error) {
+                constraintsError.value = error.message || '條件解析失敗，請稍後再試。';
+                parsedConstraints.value = null;
+                parsedConstraintsPrompt.value = '';
+            } finally {
+                isParsingConstraints.value = false;
+            }
+        };
         const eventDisplay = (event) => event.showOriginal
             ? {
                 title: event.originalTitle || event.title,
@@ -778,7 +901,8 @@
                         style: form.style,
                         conditions: form.conditions,
                         includeEvents: form.includeEvents,
-                        travelEvents: travelEvents.value
+                        travelEvents: travelEvents.value,
+                        constraints: parsedConstraints.value || null
                     })
                 }).then(async response => ({
                     response,
@@ -985,7 +1109,8 @@
                         style: form.style,
                         conditions: form.conditions,
                         editInstruction: editInstruction.value.trim(),
-                        itinerary: itinerary.value
+                        itinerary: itinerary.value,
+                        constraints: parsedConstraints.value || null
                     })
                 });
                 const data = await response.json().catch(() => ({}));
@@ -1037,7 +1162,9 @@
                 },
                 insights: insights.value,
                 travelEvents: travelEvents.value,
-                isItinerarySaved: isItinerarySaved.value
+                isItinerarySaved: isItinerarySaved.value,
+                constraints: parsedConstraints.value,
+                constraintsPrompt: parsedConstraintsPrompt.value
             }));
         };
 
@@ -1094,6 +1221,12 @@
                         }
                         isItinerarySaved.value = savedState.isItinerarySaved === true;
                         targetDay.value = itinerary.value[0].day || 1;
+                        if (savedState.constraints && typeof savedState.constraints === 'object') {
+                            parsedConstraints.value = savedState.constraints;
+                        }
+                        if (typeof savedState.constraintsPrompt === 'string') {
+                            parsedConstraintsPrompt.value = savedState.constraintsPrompt;
+                        }
                     }
                 } catch (error) {
                     localStorage.removeItem(itineraryStorageKey);
@@ -1105,7 +1238,7 @@
 
         return {
             form, today, isGenerating, itinerary, insights, travelEvents, isLoadingEvents, eventsError,
-        eventDisplay, toggleEventTranslation,
+            eventDisplay, toggleEventTranslation,
             loadTravelEvents, isReplanning, targetDay, changeReason, replanMessage,
             editInstruction, isItineraryFavorite, isItinerarySaved, isReordering, isSaving,
             activityDeleteTarget, requestDeleteActivity, cancelDeleteActivity, confirmDeleteActivity,
@@ -1113,7 +1246,10 @@
             activityTransportUrl, categoryBadgeClass, weatherRainLabel,
             generationSecondsLeft, generationError, draggedActivity, startActivityDrag, allowActivityDrop,
             dropActivity, clearActivityDrag, moveActivity, dailyAccommodationAreas,
-            removeDay, shareItinerary, downloadItinerary
+            removeDay, shareItinerary, downloadItinerary,
+            uploadFileType, constraintFiles, isParsingConstraints, constraintsError,
+            parsedConstraints, parsedConstraintsPrompt, fileTypeLabel,
+            onConstraintFilesSelected, removeConstraintFile, clearParsedConstraints, parseConstraints
         };
         }
     }).mount('#app');
