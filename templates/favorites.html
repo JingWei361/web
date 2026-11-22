@@ -822,7 +822,8 @@
                         days: Number.isInteger(context.days) ? context.days : getItinerary(item).length,
                         startDate: context.startDate,
                         budget: context.budget,
-                        conditions: context.conditions || ''
+                        conditions: context.conditions || '',
+                        itinerary: getItinerary(item)
                     })
                 });
                 const data = await response.json().catch(() => ({}));

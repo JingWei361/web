@@ -365,6 +365,10 @@
                     <p class="text-xs text-slate-500 mb-4">
                         災害、抗議及交通安排可能臨時變動；出發前請再次確認官方公告。節慶日期以主辦單位最新資訊為準。
                     </p>
+                    <p v-if="travelEvents && travelEvents.warning"
+                        class="mb-4 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-xs text-amber-800">
+                        {{ travelEvents.warning }}
+                    </p>
                     <p v-if="isLoadingEvents" class="text-sm text-slate-500">正在搜尋目的地公告與在地活動...</p>
                     <p v-if="eventsError" class="text-sm text-red-600">{{ eventsError }}</p>
                     <div v-if="travelEvents" class="grid grid-cols-1 md:grid-cols-2 gap-5">
@@ -963,7 +967,8 @@
                     days: form.days,
                     startDate: form.startDate,
                     budget: form.budget,
-                    conditions: form.conditions
+                    conditions: form.conditions,
+                    itinerary: itinerary.value || []
                 })
             });
             const data = await response.json();
