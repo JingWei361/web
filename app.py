@@ -37,11 +37,14 @@ load_dotenv()
 
 
 def get_env(name: str, legacy_name: str | None = None, default: str | None = None) -> str | None:
-    value = os.getenv(name)
-    if value:
-        return value
+    candidates = [name]
     if legacy_name:
-        value = os.getenv(legacy_name)
+        candidates.append(legacy_name)
+    react_name = f"REACT_APP_{name}"
+    if react_name not in candidates:
+        candidates.append(react_name)
+    for candidate in candidates:
+        value = os.getenv(candidate)
         if value:
             return value
     return default
@@ -172,7 +175,7 @@ def to_traditional(value: Any) -> Any:
 def get_gemini_client() -> genai.Client | None:
     api_key = (
         get_env("GEMINI_API_KEY", "REACT_APP_GEMINI_API_KEY")
-        or os.getenv("REACT_APP_EXPLORE_GEMINI_API_KEY")
+        or get_env("EXPLORE_GEMINI_API_KEY", "REACT_APP_EXPLORE_GEMINI_API_KEY")
     )
     if not api_key:
         return None
@@ -187,7 +190,7 @@ def get_gemini_embedding_client() -> genai.Client | None:
     api_key = (
         get_env("GEMINI_EMBEDDING_API_KEY", "REACT_APP_GEMINI_EMBEDDING_API_KEY")
         or get_env("GEMINI_API_KEY", "REACT_APP_GEMINI_API_KEY")
-        or os.getenv("REACT_APP_EXPLORE_GEMINI_API_KEY")
+        or get_env("EXPLORE_GEMINI_API_KEY", "REACT_APP_EXPLORE_GEMINI_API_KEY")
     )
     if not api_key:
         return None
@@ -1542,7 +1545,7 @@ def parse_constraints_api():
 
 OVERPASS_URL = "https://overpass-api.de/api/interpreter"
 # 主站忙碌或連不上時依序改用的備援伺服器（可用環境變數 OVERPASS_URLS 以逗號覆寫）
-OVERPASS_URLS = [u.strip() for u in os.getenv("OVERPASS_URLS", "").split(",") if u.strip()] or [
+OVERPASS_URLS = [u.strip() for u in (get_env("OVERPASS_URLS", "REACT_APP_OVERPASS_URLS", "") or "").split(",") if u.strip()] or [
     OVERPASS_URL,
     "https://overpass.private.coffee/api/interpreter",
     "https://maps.mail.ru/osm/tools/overpass/api/interpreter",
@@ -1736,7 +1739,7 @@ out center tags 40;
 
 def _fetch_facility_elements(types: list[str], lat: float, lng: float, radius: int) -> tuple[list[dict[str, Any]] | None, str, str]:
     """Geoapify 為主、Overpass 為備援。回傳 (elements 或 None, source, 錯誤訊息)。"""
-    api_key = (os.getenv("GEOAPIFY_API_KEY") or "").strip()
+    api_key = (get_env("GEOAPIFY_API_KEY", "REACT_APP_GEOAPIFY_API_KEY") or "").strip()
     geo_types = [t for t in types if t in FACILITY_GEOAPIFY]
     overpass_types = [t for t in types if t not in FACILITY_GEOAPIFY]
     elements: list[dict[str, Any]] = []
@@ -3660,6 +3663,6 @@ def logout():
 # ==========================================
 if __name__ == "__main__":
     # Render 會提供 PORT 環境變數；本機預設使用 OAuth 常見的 3000 埠。
-    port = int(os.environ.get("PORT", 3000))
+    port = int(get_env("PORT", "REACT_APP_PORT", "3000") or "3000")
     # 生產環境中 debug 應設為 False，但在 Render 介面可透過環境變數控制
     app.run(host='0.0.0.0', port=port)
