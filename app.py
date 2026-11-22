@@ -57,6 +57,7 @@ GEMINI_MODEL = get_env("GEMINI_MODEL", "REACT_APP_GEMINI_MODEL", GEMINI_FALLBACK
 GEMINI_TIMEOUT_MS = int(get_env("GEMINI_TIMEOUT_MS", "REACT_APP_GEMINI_TIMEOUT_MS", "60000"))
 GEMINI_EMBEDDING_MODEL = get_env("GEMINI_EMBEDDING_MODEL", "REACT_APP_GEMINI_EMBEDDING_MODEL", default="gemini-embedding-2")
 GEMINI_EMBEDDING_DIMS = int(get_env("GEMINI_EMBEDDING_DIMS", "REACT_APP_GEMINI_EMBEDDING_DIMS", default="768"))
+PGVECTOR_MIN_SIMILARITY = float(get_env("PGVECTOR_MIN_SIMILARITY", default="0.80"))
 GROQ_VISION_MODEL = get_env("GROQ_VISION_MODEL", "REACT_APP_GROQ_VISION_MODEL", default="qwen/qwen3.8-27b")
 OPENROUTER_MODEL = get_env("OPENROUTER_MODEL", "REACT_APP_OPENROUTER_MODEL", default="inclusionai/ling-3.2-flash:free")
 ROUTE_OPTIMIZATION_GUIDANCE = """
@@ -141,6 +142,31 @@ SUPABASE_KEY = get_env("SUPABASE_KEY", "REACT_APP_SUPABASE_KEY")
 if not SUPABASE_URL or not SUPABASE_KEY:
     raise RuntimeError("SUPABASE_URL and SUPABASE_KEY must be configured.")
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+# 寫入共用向量庫需繞過 RLS：有設定 service role key 就用它，否則沿用一般 client
+SUPABASE_SERVICE_ROLE_KEY = get_env("SUPABASE_SERVICE_ROLE_KEY", "REACT_APP_SUPABASE_SERVICE_ROLE_KEY")
+supabase_admin: Client = (
+    create_client(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY) if SUPABASE_SERVICE_ROLE_KEY else supabase
+)
+
+# 簡轉繁（台灣用語）：安裝 opencc-python-reimplemented 後生效，未安裝則原樣回傳
+try:
+    from opencc import OpenCC
+    _s2tw = OpenCC("s2twp")
+except Exception:
+    _s2tw = None
+
+
+def to_traditional(value: Any) -> Any:
+    if _s2tw is None:
+        return value
+    if isinstance(value, str):
+        # 保留台灣常用的「台」（OpenCC 會轉成「臺」）
+        return _s2tw.convert(value).replace("臺", "台")
+    if isinstance(value, list):
+        return [to_traditional(v) for v in value]
+    if isinstance(value, dict):
+        return {k: (v if k in {"mapsUrl", "url"} else to_traditional(v)) for k, v in value.items()}
+    return value
 
 
 def get_gemini_client() -> genai.Client | None:
@@ -252,7 +278,9 @@ def embed_texts_with_gemini(texts: list[str]) -> list[list[float]]:
     ]
     result = client.models.embed_content(
         model=GEMINI_EMBEDDING_MODEL,
-        contents=prepared,
+        # gemini-embedding-2 會把同一請求裡的多段文字「合併成一個向量」；
+        # 每段各包成一個 Content，才會逐段回傳各自的向量。
+        contents=[types.Content(parts=[types.Part(text=t)]) for t in prepared],
         config=types.EmbedContentConfig(output_dimensionality=GEMINI_EMBEDDING_DIMS),
     )
     embeddings = getattr(result, "embeddings", None) or []
@@ -389,7 +417,7 @@ def upsert_spot_embeddings(
             try:
                 # Handle NULL city correctly (unique index uses coalesce(city, ''))
                 q = (
-                    supabase.table("spot_embeddings")
+                    supabase_admin.table("spot_embeddings")
                     .select("id")
                     .eq("name", row["name"])
                 )
@@ -400,7 +428,7 @@ def upsert_spot_embeddings(
                 existing = q.limit(1).execute().data or []
     
                 if existing:
-                    supabase.table("spot_embeddings").update({
+                    supabase_admin.table("spot_embeddings").update({
                         "emoji": row["emoji"],
                         "description": row["description"],
                         "address": row["address"],
@@ -410,7 +438,7 @@ def upsert_spot_embeddings(
                     }).eq("id", existing[0]["id"]).execute()
                     app.logger.info("Updated spot embedding: %s (%s)", row["name"], row.get("city"))
                 else:
-                    supabase.table("spot_embeddings").insert(row).execute()
+                    supabase_admin.table("spot_embeddings").insert(row).execute()
                     app.logger.info("Inserted spot embedding: %s (%s)", row["name"], row.get("city"))
             except Exception as row_error:
                 app.logger.warning(
@@ -3244,6 +3272,7 @@ def recognize_image():
     # Step 1: Groq Vision — identify the landmark / scene only.
     vision_prompt = """
 請辨識這張旅遊圖片中的地標、景點或場景。
+所有文字一律使用繁體中文（台灣用語），不要使用簡體字；專有名詞只有在沒有繁體寫法時才保留原文。
 若無法確定，請誠實說明不確定，不要捏造精確地點。
 不要推薦相似景點，只回傳辨識結果。
 回傳 JSON：{"landmarkName":"辨識名稱或未知","description":"辨識說明（包含地點特徵、氛圍或相關資訊）"}
@@ -3252,6 +3281,7 @@ def recognize_image():
         result = generate_groq_image_json(vision_prompt, image_bytes, image.mimetype)
         if not isinstance(result, dict):
             raise ValueError("Groq returned an invalid image result.")
+        result = to_traditional(result)
         landmark_name = str(result.get('landmarkName') or '').strip() or '未知'
         description = str(result.get('description') or '').strip()
         result['landmarkName'] = landmark_name
@@ -3269,11 +3299,24 @@ def recognize_image():
         try:
             if landmark_name != '未知' and query_text:
                 query_vector = embed_texts_with_gemini([query_text])[0]
-                db_hits = search_spot_embeddings(
+                # 知識庫很小時，任何查詢都會「最近」那幾筆；
+                # 所以要：同城市過濾 + 較高門檻 + 排除辨識地標本身。
+                raw_hits = search_spot_embeddings(
                     query_vector,
-                    city=None,
-                    top_k=2,
-                    min_similarity=0.55,
+                    city=city_hint,
+                    top_k=6,
+                    min_similarity=PGVECTOR_MIN_SIMILARITY,
+                )
+                db_hits = [
+                    h for h in raw_hits
+                    if h.get('name') and h['name'] != landmark_name
+                    and h['name'] not in landmark_name
+                    and landmark_name not in h['name']
+                ][:2]
+                app.logger.info(
+                    "pgvector hits for %s (city=%s): %s",
+                    landmark_name, city_hint,
+                    [(h['name'], h.get('similarityScore')) for h in raw_hits],
                 )
                 if len(db_hits) >= 2:
                     similar_spots = db_hits
@@ -3295,6 +3338,7 @@ def recognize_image():
 說明：{description or '無額外說明'}
 每個候選需包含真實店名或景點名稱、emoji、簡短推薦原因、可在 Google Maps 搜尋的完整地址。
 不要重複辨識地標本身；優先選擇同一城市或同類型體驗的景點。
+所有文字一律使用繁體中文（台灣用語），不要使用簡體字。
 只回傳 JSON：{{"candidates":[{{"name":"景點名稱","emoji":"圖示","reason":"推薦原因","address":"完整地址","city":"城市"}}]}}
 """
                 candidate_result = generate_gemini_json(candidate_prompt)
@@ -3305,6 +3349,7 @@ def recognize_image():
                 )
                 if not isinstance(candidates, list) or not candidates:
                     raise ValueError("Gemini returned no candidate spots.")
+                candidates = to_traditional(candidates)
 
                 valid_candidates = []
                 existing_names = {s['name'] for s in similar_spots}
@@ -3378,6 +3423,7 @@ def recognize_image():
 已辨識地標：{landmark_name}
 說明：{description or '無'}
 請推薦 2 個相似或適合延伸探索的真實景點，每個都要提供可在 Google Maps 搜尋的地點名稱。
+所有文字一律使用繁體中文（台灣用語），不要使用簡體字。
 回傳 JSON：{{"similarSpots":[{{"name":"景點名稱","emoji":"圖示","reason":"推薦原因","address":"完整地址"}}]}}
 """
                     try:
@@ -3411,8 +3457,27 @@ def recognize_image():
                             "Groq fallback recommendation also failed."
                         )
 
+        similar_spots = to_traditional(similar_spots)
         result['similarSpots'] = similar_spots
         result['recommendationSource'] = recommendation_source
+
+        # 記錄這次辨識（登入使用者才寫入，符合 recognition_embeddings 的 RLS）
+        try:
+            if query_vector is not None and landmark_name != '未知':
+                user_client, user_id = get_authenticated_client()
+                if user_client and user_id:
+                    user_client.table("recognition_embeddings").insert({
+                        "user_id": user_id,
+                        "landmark_name": landmark_name,
+                        "description": description,
+                        "embedding": query_vector,
+                        "recommendation_data": {
+                            "similarSpots": similar_spots,
+                            "recommendationSource": recommendation_source,
+                        },
+                    }).execute()
+        except Exception as log_error:
+            app.logger.warning("Failed to save recognition embedding: %s", log_error)
         result['embeddingModel'] = (
             GEMINI_EMBEDDING_MODEL
             if 'embedding' in recommendation_source or recommendation_source == 'pgvector'
